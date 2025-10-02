@@ -39,6 +39,110 @@ app.post("/verify", (req, res) => {
   if (!result.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
   const userRaw = new URLSearchParams(initData).get("user") || "{}";
   return res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
+
+
+  app.post("/order", async (req, res) => {
+  try {
+    const { initData, items = [], paymentMethod } = req.body || {};
+    const check = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!check.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
+
+    // Price on server (adapt to your DB if you have one)
+    // Example uses your in-memory PRODUCTS array:
+    let total = 0;
+    const priced = items.map(({ id, qty = 1 }) => {
+      const p = (global.PRODUCTS || []).find(x => x.id === id);
+      const price = p ? p.price : 0;
+      total += price * qty;
+      return { id, qty, price };
+    });
+
+    if (total <= 0) return res.status(400).json({ ok:false, error:"EMPTY_CART" });
+
+    const user = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
+    const orderId = Date.now().toString(); // simple ID; use DB autoinc in production
+
+    if (paymentMethod === "COD") {
+      // Save as pending COD in your DB if you use one
+      return res.json({
+        ok: true,
+        orderId,
+        total,
+        message: "COD order placed. Pay cash at delivery."
+      });
+    }
+
+    if (paymentMethod === "UPI") {
+      const link = buildUpiLink({
+        pa: process.env.UPI_PAYEE,
+        pn: process.env.UPI_NAME || "South Asia Mart",
+        am: (total / 100).toFixed(2),
+        tn: `Order ${orderId}`
+      });
+      return res.json({
+        ok: true,
+        orderId,
+        total,
+        upi: { link }
+      });
+    }
+
+    return res.status(400).json({ ok:false, error:"UNSUPPORTED_METHOD" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"SERVER_ERROR" });
+  }app.post("/order", async (req, res) => {
+  try {
+    const { initData, items = [], paymentMethod } = req.body || {};
+    const check = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!check.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
+
+    // Price on server (adapt to your DB if you have one)
+    // Example uses your in-memory PRODUCTS array:
+    let total = 0;
+    const priced = items.map(({ id, qty = 1 }) => {
+      const p = (global.PRODUCTS || []).find(x => x.id === id);
+      const price = p ? p.price : 0;
+      total += price * qty;
+      return { id, qty, price };
+    });
+
+    if (total <= 0) return res.status(400).json({ ok:false, error:"EMPTY_CART" });
+
+    const user = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
+    const orderId = Date.now().toString(); // simple ID; use DB autoinc in production
+
+    if (paymentMethod === "COD") {
+      // Save as pending COD in your DB if you use one
+      return res.json({
+        ok: true,
+        orderId,
+        total,
+        message: "COD order placed. Pay cash at delivery."
+      });
+    }
+
+    if (paymentMethod === "UPI") {
+      const link = buildUpiLink({
+        pa: process.env.UPI_PAYEE,
+        pn: process.env.UPI_NAME || "South Asia Mart",
+        am: (total / 100).toFixed(2),
+        tn: `Order ${orderId}`
+      });
+      return res.json({
+        ok: true,
+        orderId,
+        total,
+        upi: { link }
+      });
+    }
+
+    return res.status(400).json({ ok:false, error:"UNSUPPORTED_METHOD" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"SERVER_ERROR" });
+  }
+});
 });
 
 const PORT = process.env.PORT || 8080;
