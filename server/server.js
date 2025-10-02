@@ -2,6 +2,12 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 
+function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) {
+  // pa=payee address, pn=payee name, am=amount (string), cu=currency, tn=note
+  const params = new URLSearchParams({ pa, pn, am, cu, tn });
+  return `upi://pay?${params.toString()}`;
+}
+
 const app = express();
 app.use(express.json());
 app.use(cors());
