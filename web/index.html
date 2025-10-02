@@ -1,29 +1,39 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>South Asia Mart — Mini App</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>South Asia Mart</title>
+  <link rel="stylesheet" href="./styles.css"/>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
+  <script>window.API_URL = "https://YOUR-BACKEND.onrender.com";</script>
 </head>
 <body>
+  <header class="topbar">
+    <div class="brand">South Asia Mart</div>
+    <div class="cartbadge" id="cartBadge">0</div>
+  </header>
+
   <main class="wrap">
-    <header>
-      <h1>South Asia Mart</h1>
-      <p class="sub">Groceries & daily provisions</p>
-    </header>
-
-    <section class="card">
-      <h2>Cart total</h2>
-      <div class="row"><span>Idli Rice (5kg)</span><span>₹599</span></div>
-      <div class="row"><span>Gingelly Oil (1L)</span><span>₹299</span></div>
-      <div class="row total"><span>Total</span><span>₹898</span></div>
-    </section>
-
-    <button id="ping" class="btn">Verify Telegram User</button>
+    <div id="filters" class="filters"></div>
+    <section id="grid" class="grid"></section>
   </main>
+
+  <!-- Cart drawer -->
+  <aside id="drawer" class="drawer">
+    <div class="drawer-head">
+      <h2>Your Order</h2>
+      <button id="closeDrawer" class="iconbtn">✕</button>
+    </div>
+    <div id="cartList" class="cartlist"></div>
+    <div class="note">
+      <textarea id="note" placeholder="Add comment (noodles extra spicy, leave at door, etc.)"></textarea>
+    </div>
+    <div id="payOptions" class="payopts"></div>
+  </aside>
+
+  <button id="openDrawer" class="fab">View Cart</button>
+
   <script src="./app.js"></script>
 </body>
 </html>
