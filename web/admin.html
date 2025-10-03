@@ -1,37 +1,116 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Admin — South Asia Mart</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./styles.css"/>
   <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
 </head>
 <body>
-  <main class="wrap">
-    <h1>Admin — Products</h1>
-    <label>Admin Password:
-      <input id="pw" type="password" placeholder="Enter admin password" />
-    </label>
-    <button id="login" class="btn">Login</button>
+  <!-- Topbar -->
+  <header class="topbar admin">
+    <div class="brand">South Asia Mart — Admin</div>
+    <div class="top-actions">
+      <button id="logout" class="btn">Logout</button>
+    </div>
+  </header>
 
-    <section class="card" id="tools" style="display:none">
-      <h2>Add / Update Product</h2>
-      <div class="row"><input id="id" placeholder="ID (e.g., RICE5)" /></div>
-      <div class="row"><input id="title" placeholder="Title" /></div>
-      <div class="row"><input id="price" type="number" placeholder="Price (paise)" /></div>
-      <div class="row"><input id="category" placeholder="Category" /></div>
-      <div class="row"><input id="image" placeholder="Image URL (optional)" /></div>
-      <div class="row"><label><input id="restricted" type="checkbox" /> Age Restricted</label></div>
-      <div class="row"><input id="stock" type="number" placeholder="Stock" /></div>
-      <button id="save" class="btn">Save</button>
-    </section>
+  <div class="admin-shell">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <button class="navlink active" data-view="dashboard">Dashboard</button>
+      <button class="navlink" data-view="products">Products</button>
+      <button class="navlink" data-view="orders">Orders</button>
+      <button class="navlink" data-view="users">Users (soon)</button>
+      <button class="navlink" data-view="settings">Settings (soon)</button>
+    </aside>
 
-    <section class="card" id="list" style="display:none">
-      <h2>Catalog</h2>
-      <div id="items"></div>
-    </section>
-  </main>
+    <!-- Main -->
+    <main class="main">
+      <!-- DASHBOARD -->
+      <section id="view-dashboard" class="view">
+        <h2>Overview</h2>
+        <div class="cards">
+          <div class="card"><div class="kpi" id="kpi-products">0</div><div class="muted">Products</div></div>
+          <div class="card"><div class="kpi" id="kpi-revenue">₹0</div><div class="muted">Revenue (placed+paid)</div></div>
+        </div>
+        <div class="card">
+          <h3>Low Stock</h3>
+          <div id="lowstock" class="table"></div>
+        </div>
+      </section>
+
+      <!-- PRODUCTS -->
+      <section id="view-products" class="view hidden">
+        <div class="toolbar">
+          <input id="pSearch" class="input" placeholder="Search title or ID"/>
+          <select id="pPageSize" class="input" style="max-width:120px">
+            <option>20</option><option>50</option><option>100</option>
+          </select>
+          <button id="pReload" class="btn">Reload</button>
+          <label class="btn">
+            Bulk Import CSV
+            <input id="csvFile" type="file" accept=".csv" style="display:none"/>
+          </label>
+        </div>
+
+        <div class="grid2">
+          <form id="productForm" class="card">
+            <h3>Add / Update Product</h3>
+            <input class="input" id="pid" placeholder="ID (e.g., RICE5)"/>
+            <input class="input" id="ptitle" placeholder="Title"/>
+            <input class="input" id="pprice" type="number" placeholder="Price (paise)"/>
+            <input class="input" id="pcat" placeholder="Category"/>
+            <input class="input" id="pimg" placeholder="Image URL (optional)"/>
+            <label><input id="prestrict" type="checkbox"/> Age Restricted</label>
+            <input class="input" id="pstock" type="number" placeholder="Stock"/>
+            <button class="btn primary" type="submit">Save</button>
+          </form>
+
+          <div class="card">
+            <h3>Catalog</h3>
+            <div id="pTable" class="table"></div>
+            <div class="pager">
+              <button id="pPrev" class="btn">Prev</button>
+              <span id="pPageInfo" class="muted"></span>
+              <button id="pNext" class="btn">Next</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ORDERS -->
+      <section id="view-orders" class="view hidden">
+        <div class="toolbar">
+          <select id="oStatus" class="input" style="max-width:160px">
+            <option value="">All statuses</option>
+            <option>placed</option><option>paid</option><option>shipped</option><option>delivered</option><option>cancelled</option>
+          </select>
+          <input id="oQuery" class="input" placeholder="Search name/phone/address"/>
+          <button id="oReload" class="btn">Reload</button>
+        </div>
+        <div class="card">
+          <h3>Orders</h3>
+          <div id="oTable" class="table"></div>
+          <div class="pager">
+            <button id="oPrev" class="btn">Prev</button>
+            <span id="oPageInfo" class="muted"></span>
+            <button id="oNext" class="btn">Next</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PLACEHOLDERS -->
+      <section id="view-users" class="view hidden">
+        <div class="card"><h3>Users</h3><p class="muted">Role-based users coming next.</p></div>
+      </section>
+      <section id="view-settings" class="view hidden">
+        <div class="card"><h3>Settings</h3><p class="muted">Delivery slots, payment toggles, banners — next.</p></div>
+      </section>
+    </main>
+  </div>
+
   <script src="./admin.js"></script>
 </body>
 </html>
