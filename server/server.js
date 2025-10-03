@@ -42,6 +42,7 @@ app.get("/__dbping", async (req, res) => {
     const r = await pool.query("select 1 as ok");
     res.json({ ok:true, result:r.rows[0] });
   } catch (e) {
+    console.error("DB PING ERROR:", e);
     res.status(500).json({ ok:false, error:String(e) });
   }
 });
@@ -91,7 +92,7 @@ create table if not exists orders (
   note text,
   total integer not null,
   payment_method text not null,
-  status text not null default 'placed', -- placed, paid, cancelled
+  status text not null default 'placed', -- placed, paid, shipped, delivered, cancelled
   created_at timestamptz not null default now()
 );
 
@@ -172,6 +173,108 @@ app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query("delete from products where id=$1", [req.params.id]);
   res.json({ ok: true });
+});
+
+// ---------- Admin: Stats (dashboard)
+app.get("/admin/stats", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const prod = await pool.query("select count(*)::int as count from products");
+    const rev  = await pool.query("select coalesce(sum(total),0)::int as revenue from orders where status in ('paid','placed')");
+    const last7 = await pool.query(`
+      select to_char(date_trunc('day', created_at),'YYYY-MM-DD') as day,
+             count(*)::int as orders, coalesce(sum(total),0)::int as revenue
+      from orders where created_at > now() - interval '7 days'
+      group by 1 order by 1
+    `);
+    const low = await pool.query("select id,title,stock from products where stock <= 20 order by stock asc limit 20");
+    res.json({
+      ok: true,
+      product_count: prod.rows[0].count,
+      revenue: rev.rows[0].revenue,
+      last7: last7.rows,
+      low_stock: low.rows
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"STATS_FAILED" });
+  }
+});
+
+// ---------- Admin: Orders list with filters + pagination
+app.get("/admin/orders", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const { status, q, page = "1", pageSize = "20" } = req.query;
+    const limit = Math.min(parseInt(pageSize, 10) || 20, 100);
+    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+
+    const where = [];
+    const params = [];
+    if (status) { params.push(status); where.push(`status = $${params.length}`); }
+    if (q) {
+      params.push(`%${q}%`);
+      const i = params.length;
+      where.push(`(name ilike $${i} or phone ilike $${i} or address ilike $${i})`);
+    }
+    const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+
+    const items = (await pool.query(
+      `select id, name, phone, address, slot, note, total, status, created_at
+       from orders ${whereSql}
+       order by created_at desc
+       limit ${limit} offset ${offset}`,
+      params
+    )).rows;
+
+    const total = (await pool.query(
+      `select count(*)::int as count from orders ${whereSql}`, params
+    )).rows[0].count;
+
+    res.json({ ok:true, items, page:+page, pageSize:limit, total });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"ORDERS_FAILED" });
+  }
+});
+
+// ---------- Admin: Update order status
+app.put("/admin/orders/:id/status", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const allowed = ["placed","paid","shipped","delivered","cancelled"];
+  const { status } = req.body || {};
+  if (!allowed.includes(status)) return res.status(400).json({ ok:false, error:"INVALID_STATUS" });
+  await pool.query("update orders set status=$1 where id=$2", [status, req.params.id]);
+  res.json({ ok:true });
+});
+
+// ---------- Admin: Bulk upsert products
+app.post("/admin/products/bulk", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const { items = [] } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    for (const p of items) {
+      const { id, title, price, category, image = "", age_restricted = false, stock = 999 } = p;
+      if (!id || !title || !category) continue;
+      await client.query(
+        `insert into products(id,title,price,category,image,age_restricted,stock)
+         values($1,$2,$3,$4,$5,$6,$7)
+         on conflict(id) do update set
+           title=$2, price=$3, category=$4, image=$5, age_restricted=$6, stock=$7`,
+        [id, title, +price||0, category, image, !!age_restricted, +stock||0]
+      );
+    }
+    await client.query("commit");
+    res.json({ ok:true, upserted: items.length });
+  } catch (e) {
+    await client.query("rollback");
+    console.error(e);
+    res.status(500).json({ ok:false, error:"BULK_FAILED" });
+  } finally {
+    client.release();
+  }
 });
 
 // ===== Public catalog =====
