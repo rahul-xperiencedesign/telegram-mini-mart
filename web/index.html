@@ -6,7 +6,7 @@
   <title>South Asia Mart</title>
   <link rel="stylesheet" href="./styles.css"/>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
+  <script>window.API_URL = "https://YOUR-BACKEND.onrender.com";</script>
 </head>
 <body>
   <header class="topbar">
@@ -19,6 +19,15 @@
     <section id="grid" class="grid"></section>
   </main>
 
+  <!-- Age Gate -->
+  <div id="ageGate" class="modal hidden">
+    <div class="modal-card">
+      <h3>Age Verification</h3>
+      <p>This order contains age-restricted products. Please confirm you are 21+ and choose Cash on Delivery.</p>
+      <button id="ageOk" class="paybtn cod">I’m 21+ (Continue)</button>
+    </div>
+  </div>
+
   <!-- Cart drawer -->
   <aside id="drawer" class="drawer">
     <div class="drawer-head">
@@ -26,9 +35,27 @@
       <button id="closeDrawer" class="iconbtn">✕</button>
     </div>
     <div id="cartList" class="cartlist"></div>
+
     <div class="note">
-      <textarea id="note" placeholder="Add comment (noodles extra spicy, leave at door, etc.)"></textarea>
+      <textarea id="note" placeholder="Add comment..."></textarea>
     </div>
+
+    <!-- Checkout form -->
+    <section class="card">
+      <h3>Delivery Details</h3>
+      <div class="row"><input id="name" placeholder="Full Name"/></div>
+      <div class="row"><input id="phone" placeholder="Phone"/></div>
+      <div class="row"><textarea id="address" placeholder="Address"></textarea></div>
+      <div class="row">
+        <select id="slot">
+          <option value="">Choose delivery slot</option>
+          <option>Today 6–8 PM</option>
+          <option>Today 8–10 PM</option>
+          <option>Tomorrow 10–12 AM</option>
+        </select>
+      </div>
+    </section>
+
     <div id="payOptions" class="payopts"></div>
   </aside>
 
