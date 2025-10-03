@@ -2,9 +2,17 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import pkg from "pg";
-
 const { Pool } = pkg;
-const app = express();
+
+let pool = null;
+if (process.env.DATABASE_URL) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // needed for Render's external Postgres
+  });
+} else {
+  console.warn("DATABASE_URL not set — DB endpoints will return DB_NOT_CONFIGURED.");
+}
 
 app.use(express.json());
 app.use(
