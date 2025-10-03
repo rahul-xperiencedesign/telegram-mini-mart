@@ -1,19 +1,11 @@
+// ===== Imports & app bootstrap =====
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
-import pkg from "pg";
+import pkg from "pg";                 // postgres client (pg)
 const { Pool } = pkg;
 
-let pool = null;
-if (process.env.DATABASE_URL) {
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // needed for Render's external Postgres
-  });
-} else {
-  console.warn("DATABASE_URL not set — DB endpoints will return DB_NOT_CONFIGURED.");
-}
-
+const app = express();
 app.use(express.json());
 app.use(
   cors({
@@ -21,7 +13,19 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE"],
   })
 );
-// TEMP: check if DATABASE_URL reaches the app (remove later)
+
+// ===== Single pool declaration (do NOT redeclare anywhere) =====
+let pool = null;
+if (process.env.DATABASE_URL) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }, // required for Render external PG
+  });
+} else {
+  console.warn("DATABASE_URL not set — DB endpoints will return DB_NOT_CONFIGURED.");
+}
+
+// ===== TEMP debug routes (remove later) =====
 app.get("/__envcheck", (req, res) => {
   const s = process.env.DATABASE_URL || "";
   let info = null;
@@ -32,13 +36,17 @@ app.get("/__envcheck", (req, res) => {
   res.json({ ok: true, hasDATABASE_URL: !!s, db: info });
 });
 
-// ====== DB ======
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+app.get("/__dbping", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const r = await pool.query("select 1 as ok");
+    res.json({ ok:true, result:r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
+  }
 });
 
-// ====== Helpers ======
+// ===== Helpers =====
 function verifyInitData(initData, botToken) {
   if (!initData) return { ok: false, reason: "missing initData" };
   const params = new URLSearchParams(initData);
@@ -61,7 +69,7 @@ function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) 
   return `upi://pay?${params.toString()}`;
 }
 
-// ====== Schema & seed ======
+// ===== Schema & seed =====
 const SCHEMA_SQL = `
 create table if not exists products (
   id text primary key,
@@ -110,10 +118,10 @@ insert into products(id,title,price,category,image,age_restricted,stock) values
 on conflict (id) do nothing;
 `;
 
-// ====== Health ======
-app.get("/", (_, res) => res.json({ ok: true, service: "backend-alive" }));
+// ===== Health =====
+app.get("/", (_req, res) => res.json({ ok: true, service: "backend-alive" }));
 
-// ====== Verify test ======
+// ===== Verify test =====
 app.post("/verify", (req, res) => {
   const { initData } = req.body || {};
   const r = verifyInitData(initData, process.env.BOT_TOKEN);
@@ -122,25 +130,33 @@ app.post("/verify", (req, res) => {
   res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
 });
 
-// ====== Admin (init/seed, secure by header) ======
+// ===== Admin (init/seed, secure by header) =====
 function requireAdmin(req, res, next) {
   const key = req.headers["x-admin-key"];
   if (!key || key !== process.env.ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
   next();
 }
+
 app.post("/admin/init", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query(SCHEMA_SQL);
   res.json({ ok: true });
 });
+
 app.post("/admin/seed", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query(SEED_SQL);
   res.json({ ok: true });
 });
+
 app.get("/admin/products", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const q = await pool.query("select * from products order by title");
   res.json({ ok: true, items: q.rows });
 });
+
 app.post("/admin/products", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const { id, title, price, category, image = "", age_restricted = false, stock = 999 } = req.body || {};
   if (!id || !title || !category) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
   await pool.query(
@@ -151,16 +167,20 @@ app.post("/admin/products", requireAdmin, async (req, res) => {
   );
   res.json({ ok: true });
 });
+
 app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query("delete from products where id=$1", [req.params.id]);
   res.json({ ok: true });
 });
 
-// ====== Public catalog ======
+// ===== Public catalog =====
 app.get("/categories", async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const q = await pool.query("select distinct category from products order by category");
   res.json({ ok: true, categories: q.rows.map(r => r.category) });
 });
+
 app.get("/products", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const cat = req.query.category;
@@ -170,10 +190,16 @@ app.get("/products", async (req, res) => {
   res.json({ ok: true, items: q.rows });
 });
 
-// ====== Price cart on server
+// ===== Price cart on server =====
 app.post("/cart/price", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const { items = [] } = req.body || {};
-  if (!items.length) return res.json({ ok: true, items: [], total: 0, payments: { onlineAllowed: !!process.env.PROVIDER_TOKEN, upiAllowed: true, codAllowed: true } });
+  if (!items.length) {
+    return res.json({
+      ok: true, items: [], total: 0,
+      payments: { onlineAllowed: !!process.env.PROVIDER_TOKEN, upiAllowed: true, codAllowed: true }
+    });
+  }
   const ids = items.map(i => i.id);
   const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [ids]);
   const map = new Map(q.rows.map(r => [r.id, r]));
@@ -193,11 +219,11 @@ app.post("/cart/price", async (req, res) => {
   res.json({ ok: true, items: detailed, total, payments });
 });
 
-// ====== Place order (COD / UPI)
+// ===== Place order (COD / UPI) =====
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
-    const { initData, items = [], paymentMethod, form } = req.body || {}; // form: {name,phone,address,slot,note}
+    const { initData, items = [], paymentMethod, form } = req.body || {};
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
     if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
@@ -213,10 +239,8 @@ app.post("/order", async (req, res) => {
       return { id, title: p?.title || id, price, qty };
     });
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
-
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
-    // save order row
     const user = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
     const ins = await pool.query(
       `insert into orders(tg_user_id,name,phone,address,slot,note,total,payment_method,status)
@@ -247,7 +271,7 @@ app.post("/order", async (req, res) => {
   }
 });
 
-// ====== Online invoice (only if PROVIDER_TOKEN)
+// ===== Online invoice (needs PROVIDER_TOKEN) =====
 app.post("/checkout", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
@@ -294,14 +318,13 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-// ====== Webhook for paid orders (online payments)
+// ===== Telegram paid webhook =====
 app.post("/telegram/webhook", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
     const update = req.body;
     const sp = update?.message?.successful_payment;
     if (sp) {
-      // Mark last order of this user as paid (basic example; you can match payload)
       const uid = update?.message?.from?.id || null;
       await pool.query(
         "update orders set status='paid' where tg_user_id=$1 and status='placed' order by created_at desc limit 1",
@@ -315,5 +338,6 @@ app.post("/telegram/webhook", async (req, res) => {
   }
 });
 
+// ===== Start server =====
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Backend running on :${PORT}`));
