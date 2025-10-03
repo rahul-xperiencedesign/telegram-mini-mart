@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Login — South Asia Mart</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <h1>South Asia Mart — Admin</h1>
+    <p class="muted">Enter admin password to continue.</p>
+    <input id="pw" type="password" placeholder="Admin Password" class="input" />
+    <button id="btn" class="btn primary" style="width:100%">Login</button>
+    <p class="muted" style="margin-top:10px">Tip: set <code>ADMIN_PASSWORD</code> in Render Environment.</p>
+  </div>
+  <script>
+    document.getElementById('btn').onclick = async () => {
+      const key = (document.getElementById('pw').value || '').trim();
+      if (!key) return alert('Enter password');
+      // Quick ping to verify
+      const ok = await fetch(window.API_URL + '/admin/products', { headers: { 'x-admin-key': key } })
+        .then(r => r.ok).catch(()=>false);
+      if (!ok) return alert('Invalid password or API unavailable');
+      localStorage.setItem('adminkey', key);
+      location.href = './admin.html';
+    };
+  </script>
+</body>
+</html>
