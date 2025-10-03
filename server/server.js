@@ -13,6 +13,16 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE"],
   })
 );
+// TEMP: check if DATABASE_URL reaches the app (remove later)
+app.get("/__envcheck", (req, res) => {
+  const s = process.env.DATABASE_URL || "";
+  let info = null;
+  try {
+    const u = new URL(s);
+    info = { protocol: u.protocol, host: u.hostname, port: u.port };
+  } catch { info = null; }
+  res.json({ ok: true, hasDATABASE_URL: !!s, db: info });
+});
 
 // ====== DB ======
 const pool = new Pool({
