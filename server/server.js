@@ -162,6 +162,7 @@ app.get("/categories", async (_req, res) => {
   res.json({ ok: true, categories: q.rows.map(r => r.category) });
 });
 app.get("/products", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const cat = req.query.category;
   const q = cat
     ? await pool.query("select * from products where category=$1 order by title", [cat])
@@ -194,6 +195,7 @@ app.post("/cart/price", async (req, res) => {
 
 // ====== Place order (COD / UPI)
 app.post("/order", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
     const { initData, items = [], paymentMethod, form } = req.body || {}; // form: {name,phone,address,slot,note}
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
@@ -247,6 +249,7 @@ app.post("/order", async (req, res) => {
 
 // ====== Online invoice (only if PROVIDER_TOKEN)
 app.post("/checkout", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
     if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok: false, error: "ONLINE_DISABLED" });
     const { initData, items = [], form } = req.body || {};
@@ -293,6 +296,7 @@ app.post("/checkout", async (req, res) => {
 
 // ====== Webhook for paid orders (online payments)
 app.post("/telegram/webhook", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
     const update = req.body;
     const sp = update?.message?.successful_payment;
