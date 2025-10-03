@@ -1,17 +1,26 @@
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
+import pkg from "pg";
 
+const { Pool } = pkg;
 const app = express();
+
 app.use(express.json());
 app.use(
   cors({
     origin: [/\.vercel\.app$/, /localhost:\d+$/],
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
   })
 );
 
-// ---- Telegram initData verification
+// ====== DB ======
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+// ====== Helpers ======
 function verifyInitData(initData, botToken) {
   if (!initData) return { ok: false, reason: "missing initData" };
   const params = new URLSearchParams(initData);
@@ -28,156 +37,259 @@ function verifyInitData(initData, botToken) {
   const ok = hash && crypto.timingSafeEqual(Buffer.from(calcHash), Buffer.from(hash));
   return { ok, user: params.get("user") };
 }
-
-// ---- Simple catalog (price in paise, like INR cents)
-global.PRODUCTS = [
-  // Staples
-  { id:"RICE5",  title:"Basmati Rice 5kg",    price: 89900, category:"Rice & Grains", image:"", tags:["rice"] },
-  { id:"ATTA5",  title:"Wheat Flour 5kg",     price: 34900, category:"Flour & Atta",  image:"", tags:["flour"] },
-  { id:"DAL1",   title:"Toor Dal 1kg",       price: 19900, category:"Pulses",        image:"", tags:["pulses"] },
-  { id:"CHAITEA",title:"Masala Tea 250g",    price: 24900, category:"Tea & Beverages",image:"", tags:["tea"] },
-  { id:"BIS1",   title:"Marie Biscuits 500g",price: 11900, category:"Snacks & Namkeen", image:"", tags:["biscuits"] },
-  { id:"NP_MIX", title:"South Mix 400g",     price: 14900, category:"Snacks & Namkeen", image:"", tags:["namkeen"] },
-  // Age-restricted samples (force COD)
-  { id:"BEER6",  title:"Lager Beer 6-pack",  price: 79900, category:"Alcohol", image:"", tags:["alcohol"], ageRestricted:true },
-  { id:"SMOKPK", title:"Cigarette Pack",     price: 34900, category:"Tobacco", image:"", tags:["tobacco"], ageRestricted:true },
-];
-
-// ---- Helpers
-const uniq = (arr) => [...new Set(arr)].filter(Boolean);
-function buildUpiLink({ pa, pn, am, cu="INR", tn="South Asia Mart order" }) {
+const rupees = (p) => (p / 100).toFixed(2);
+function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) {
   const params = new URLSearchParams({ pa, pn, am, cu, tn });
   return `upi://pay?${params.toString()}`;
 }
 
-// ---- Health
-app.get("/", (_, res) => res.json({ ok:true, service:"backend-alive" }));
+// ====== Schema & seed ======
+const SCHEMA_SQL = `
+create table if not exists products (
+  id text primary key,
+  title text not null,
+  price integer not null check (price >= 0),
+  category text not null,
+  image text default '',
+  age_restricted boolean not null default false,
+  stock integer not null default 999
+);
 
-// ---- Verify user (test button)
+create table if not exists orders (
+  id bigserial primary key,
+  tg_user_id bigint,
+  name text,
+  phone text,
+  address text,
+  slot text,
+  note text,
+  total integer not null,
+  payment_method text not null,
+  status text not null default 'placed', -- placed, paid, cancelled
+  created_at timestamptz not null default now()
+);
+
+create table if not exists order_items (
+  id bigserial primary key,
+  order_id bigint references orders(id) on delete cascade,
+  product_id text references products(id),
+  title text,
+  price integer not null,
+  qty integer not null
+);
+`;
+
+const SEED_SQL = `
+insert into products(id,title,price,category,image,age_restricted,stock) values
+('RICE5','Basmati Rice 5kg',89900,'Rice & Grains','',false,500),
+('ATTA5','Wheat Flour 5kg',34900,'Flour & Atta','',false,500),
+('DAL1','Toor Dal 1kg',19900,'Pulses','',false,500),
+('CHAITEA','Masala Tea 250g',24900,'Tea & Beverages','',false,500),
+('NP_MIX','South Mix 400g',14900,'Snacks & Namkeen','',false,500),
+('BIS1','Marie Biscuits 500g',11900,'Snacks & Namkeen','',false,500),
+('BEER6','Lager Beer 6-pack',79900,'Alcohol','',true,200),
+('SMOKPK','Cigarette Pack',34900,'Tobacco','',true,200)
+on conflict (id) do nothing;
+`;
+
+// ====== Health ======
+app.get("/", (_, res) => res.json({ ok: true, service: "backend-alive" }));
+
+// ====== Verify test ======
 app.post("/verify", (req, res) => {
   const { initData } = req.body || {};
-  const result = verifyInitData(initData, process.env.BOT_TOKEN);
-  if (!result.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
+  const r = verifyInitData(initData, process.env.BOT_TOKEN);
+  if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
   const userRaw = new URLSearchParams(initData).get("user") || "{}";
-  res.json({ ok:true, user: JSON.parse(decodeURIComponent(userRaw)) });
+  res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
 });
 
-// ---- Categories & products
-app.get("/categories", (_, res) => {
-  const cats = uniq(global.PRODUCTS.map(p => p.category));
-  res.json({ ok:true, categories: cats });
+// ====== Admin (init/seed, secure by header) ======
+function requireAdmin(req, res, next) {
+  const key = req.headers["x-admin-key"];
+  if (!key || key !== process.env.ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  next();
+}
+app.post("/admin/init", requireAdmin, async (_req, res) => {
+  await pool.query(SCHEMA_SQL);
+  res.json({ ok: true });
+});
+app.post("/admin/seed", requireAdmin, async (_req, res) => {
+  await pool.query(SEED_SQL);
+  res.json({ ok: true });
+});
+app.get("/admin/products", requireAdmin, async (_req, res) => {
+  const q = await pool.query("select * from products order by title");
+  res.json({ ok: true, items: q.rows });
+});
+app.post("/admin/products", requireAdmin, async (req, res) => {
+  const { id, title, price, category, image = "", age_restricted = false, stock = 999 } = req.body || {};
+  if (!id || !title || !category) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+  await pool.query(
+    `insert into products(id,title,price,category,image,age_restricted,stock)
+     values($1,$2,$3,$4,$5,$6,$7)
+     on conflict(id) do update set title=$2,price=$3,category=$4,image=$5,age_restricted=$6,stock=$7`,
+    [id, title, +price || 0, category, image, !!age_restricted, +stock || 0]
+  );
+  res.json({ ok: true });
+});
+app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
+  await pool.query("delete from products where id=$1", [req.params.id]);
+  res.json({ ok: true });
 });
 
-app.get("/products", (req, res) => {
+// ====== Public catalog ======
+app.get("/categories", async (_req, res) => {
+  const q = await pool.query("select distinct category from products order by category");
+  res.json({ ok: true, categories: q.rows.map(r => r.category) });
+});
+app.get("/products", async (req, res) => {
   const cat = req.query.category;
-  const items = cat ? global.PRODUCTS.filter(p => p.category === cat) : global.PRODUCTS;
-  res.json({ ok:true, items });
+  const q = cat
+    ? await pool.query("select * from products where category=$1 order by title", [cat])
+    : await pool.query("select * from products order by title");
+  res.json({ ok: true, items: q.rows });
 });
 
-// ---- Server pricing (and compliance flags)
-app.post("/cart/price", (req, res) => {
+// ====== Price cart on server
+app.post("/cart/price", async (req, res) => {
   const { items = [] } = req.body || {};
-  let total = 0;
-  let ageRestricted = false;
+  if (!items.length) return res.json({ ok: true, items: [], total: 0, payments: { onlineAllowed: !!process.env.PROVIDER_TOKEN, upiAllowed: true, codAllowed: true } });
+  const ids = items.map(i => i.id);
+  const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [ids]);
+  const map = new Map(q.rows.map(r => [r.id, r]));
+  let total = 0, restricted = false;
   const detailed = items.map(({ id, qty = 1 }) => {
-    const p = global.PRODUCTS.find(x => x.id === id);
+    const p = map.get(id);
     const price = p ? p.price : 0;
     total += price * qty;
-    if (p?.ageRestricted) ageRestricted = true;
-    return { id, qty, price, title: p?.title || id, ageRestricted: !!p?.ageRestricted };
+    if (p?.age_restricted) restricted = true;
+    return { id, qty, price, title: p?.title || id, ageRestricted: !!p?.age_restricted };
   });
-
-  // If any restricted item, disable ONLINE/UPI for safety; allow COD
   const payments = {
-    onlineAllowed: !ageRestricted && !!process.env.PROVIDER_TOKEN,
-    upiAllowed:    !ageRestricted,   // adjust to policy as needed
-    codAllowed:    true
+    onlineAllowed: !restricted && !!process.env.PROVIDER_TOKEN,
+    upiAllowed: !restricted,
+    codAllowed: true,
   };
-
-  res.json({ ok:true, items: detailed, total, payments });
+  res.json({ ok: true, items: detailed, total, payments });
 });
 
-// ---- Place order for COD / UPI
-app.post("/order", (req, res) => {
+// ====== Place order (COD / UPI)
+app.post("/order", async (req, res) => {
   try {
-    const { initData, items = [], paymentMethod } = req.body || {};
-    const check = verifyInitData(initData, process.env.BOT_TOKEN);
-    if (!check.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
+    const { initData, items = [], paymentMethod, form } = req.body || {}; // form: {name,phone,address,slot,note}
+    const r = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
-    let total = 0, ageRestricted=false;
-    const priced = items.map(({ id, qty=1 }) => {
-      const p = global.PRODUCTS.find(x => x.id === id);
+    const ids = items.map(i => i.id);
+    const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [ids]);
+    const map = new Map(q.rows.map(r => [r.id, r]));
+    let total = 0, restricted = false;
+    const detailed = items.map(({ id, qty = 1 }) => {
+      const p = map.get(id);
       const price = p ? p.price : 0;
       total += price * qty;
-      if (p?.ageRestricted) ageRestricted = true;
-      return { id, qty, price };
+      if (p?.age_restricted) restricted = true;
+      return { id, title: p?.title || id, price, qty };
     });
-    if (total <= 0) return res.status(400).json({ ok:false, error:"EMPTY_CART" });
+    if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
 
-    const orderId = Date.now().toString();
+    if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
-    if (paymentMethod === "COD") {
-      return res.json({ ok:true, orderId, total, method:"COD" });
+    // save order row
+    const user = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
+    const ins = await pool.query(
+      `insert into orders(tg_user_id,name,phone,address,slot,note,total,payment_method,status)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
+      [user?.id || null, form?.name || "", form?.phone || "", form?.address || "", form?.slot || "", form?.note || "", total, paymentMethod, "placed"]
+    );
+    const orderId = ins.rows[0].id;
+    for (const d of detailed) {
+      await pool.query("insert into order_items(order_id,product_id,title,price,qty) values($1,$2,$3,$4,$5)", [orderId, d.id, d.title, d.price, d.qty]);
     }
+
+    if (paymentMethod === "COD") return res.json({ ok: true, orderId, total, method: "COD" });
+
     if (paymentMethod === "UPI") {
-      if (ageRestricted) return res.status(400).json({ ok:false, error:"RESTRICTED_UPI_BLOCKED" });
       const link = buildUpiLink({
         pa: process.env.UPI_PAYEE || "yourupi@okbank",
-        pn: process.env.UPI_NAME  || "South Asia Mart",
-        am: (total/100).toFixed(2),
-        tn: `Order ${orderId}`
+        pn: process.env.UPI_NAME || "South Asia Mart",
+        am: rupees(total),
+        tn: `Order ${orderId}`,
       });
-      return res.json({ ok:true, orderId, total, method:"UPI", upi:{ link } });
+      return res.json({ ok: true, orderId, total, method: "UPI", upi: { link } });
     }
-    return res.status(400).json({ ok:false, error:"UNSUPPORTED_METHOD" });
+
+    return res.status(400).json({ ok: false, error: "UNSUPPORTED_METHOD" });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ ok:false, error:"SERVER_ERROR" });
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
-// ---- Online invoice (only if PROVIDER_TOKEN exists)
+// ====== Online invoice (only if PROVIDER_TOKEN)
 app.post("/checkout", async (req, res) => {
   try {
-    if (!process.env.PROVIDER_TOKEN)
-      return res.status(400).json({ ok:false, error:"ONLINE_DISABLED" });
+    if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok: false, error: "ONLINE_DISABLED" });
+    const { initData, items = [], form } = req.body || {};
+    const r = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
-    const { initData, items = [] } = req.body || {};
-    const check = verifyInitData(initData, process.env.BOT_TOKEN);
-    if (!check.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
-
-    let total = 0, ageRestricted=false;
-    const prices = items.map(({ id, qty=1 }) => {
-      const p = global.PRODUCTS.find(x => x.id === id);
-      if (p?.ageRestricted) ageRestricted = true;
+    const ids = items.map(i => i.id);
+    const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [ids]);
+    const map = new Map(q.rows.map(r => [r.id, r]));
+    let total = 0, restricted = false;
+    const prices = items.map(({ id, qty = 1 }) => {
+      const p = map.get(id);
+      if (p?.age_restricted) restricted = true;
       const amount = (p?.price || 0) * qty;
       total += amount;
       return { label: p?.title || id, amount };
     });
-    if (total <= 0) return res.status(400).json({ ok:false, error:"EMPTY_CART" });
-    if (ageRestricted) return res.status(400).json({ ok:false, error:"RESTRICTED_ONLINE_BLOCKED" });
+    if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
+    if (restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_ONLINE_BLOCKED" });
 
     const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
       method: "POST",
-      headers: { "Content-Type":"application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: "South Asia Mart Order",
-        description: "Groceries",
+        description: `${form?.name || ""} · ${form?.phone || ""}`,
         payload: "order-" + Date.now(),
         provider_token: process.env.PROVIDER_TOKEN,
         currency: "INR",
         prices,
         need_name: true,
         need_shipping_address: true,
-        is_flexible: false
+        is_flexible: false,
       }),
     });
     const json = await resp.json();
     if (!json.ok) return res.status(500).json(json);
-    res.json({ ok:true, link: json.result });
+    res.json({ ok: true, link: json.result, total });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ ok:false, error:"SERVER_ERROR" });
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// ====== Webhook for paid orders (online payments)
+app.post("/telegram/webhook", async (req, res) => {
+  try {
+    const update = req.body;
+    const sp = update?.message?.successful_payment;
+    if (sp) {
+      // Mark last order of this user as paid (basic example; you can match payload)
+      const uid = update?.message?.from?.id || null;
+      await pool.query(
+        "update orders set status='paid' where tg_user_id=$1 and status='placed' order by created_at desc limit 1",
+        [uid]
+      );
+    }
+    res.sendStatus(200);
+  } catch (e) {
+    console.error(e);
+    res.sendStatus(200);
   }
 });
 
