@@ -8,7 +8,6 @@
   <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
 </head>
 <body>
-  <!-- Topbar -->
   <header class="topbar admin">
     <div class="brand">South Asia Mart — Admin</div>
     <div class="top-actions">
@@ -17,18 +16,16 @@
   </header>
 
   <div class="admin-shell">
-    <!-- Sidebar -->
     <aside class="sidebar">
       <button class="navlink active" data-view="dashboard">Dashboard</button>
       <button class="navlink" data-view="products">Products</button>
       <button class="navlink" data-view="orders">Orders</button>
-      <button class="navlink" data-view="users">Users (soon)</button>
+      <button class="navlink" data-view="users">Users</button>
       <button class="navlink" data-view="settings">Settings (soon)</button>
     </aside>
 
-    <!-- Main -->
     <main class="main">
-      <!-- DASHBOARD -->
+      <!-- Dashboard -->
       <section id="view-dashboard" class="view">
         <h2>Overview</h2>
         <div class="cards">
@@ -41,7 +38,7 @@
         </div>
       </section>
 
-      <!-- PRODUCTS -->
+      <!-- Products -->
       <section id="view-products" class="view hidden">
         <div class="toolbar">
           <input id="pSearch" class="input" placeholder="Search title or ID"/>
@@ -80,7 +77,7 @@
         </div>
       </section>
 
-      <!-- ORDERS -->
+      <!-- Orders -->
       <section id="view-orders" class="view hidden">
         <div class="toolbar">
           <select id="oStatus" class="input" style="max-width:160px">
@@ -101,12 +98,21 @@
         </div>
       </section>
 
-      <!-- PLACEHOLDERS -->
+      <!-- Users -->
       <section id="view-users" class="view hidden">
-        <div class="card"><h3>Users</h3><p class="muted">Role-based users coming next.</p></div>
+        <div class="toolbar">
+          <input id="uQuery" class="input" placeholder="Search name/phone/username"/>
+          <button id="uReload" class="btn">Reload</button>
+        </div>
+        <div class="card">
+          <h3>Users</h3>
+          <div id="uTable" class="table"></div>
+        </div>
       </section>
+
+      <!-- Placeholder -->
       <section id="view-settings" class="view hidden">
-        <div class="card"><h3>Settings</h3><p class="muted">Delivery slots, payment toggles, banners — next.</p></div>
+        <div class="card"><h3>Settings</h3><p class="muted">Delivery slots, payment toggles — coming next.</p></div>
       </section>
     </main>
   </div>
