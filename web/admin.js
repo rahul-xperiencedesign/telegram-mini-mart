@@ -2,11 +2,9 @@ const API = window.API_URL || "";
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const key = localStorage.getItem("adminkey");
-
-// Redirect to login if no key
 if (!key) location.href = "./admin-login.html";
 
-// Sidebar navigation
+// Sidebar nav
 $$(".navlink").forEach(b => b.onclick = () => {
   $$(".navlink").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
@@ -15,11 +13,12 @@ $$(".navlink").forEach(b => b.onclick = () => {
   if (b.dataset.view === "dashboard") loadDashboard();
   if (b.dataset.view === "products")  loadProducts();
   if (b.dataset.view === "orders")    loadOrders();
+  if (b.dataset.view === "users")     loadUsers();
 });
 
 $("#logout").onclick = () => { localStorage.removeItem("adminkey"); location.href = "./admin-login.html"; };
 
-// ---- Dashboard
+// ----- Dashboard
 async function loadDashboard(){
   const r = await fetch(API + "/admin/stats", { headers: { "x-admin-key": key } }).then(r=>r.json());
   if (!r.ok) return alert("Stats error");
@@ -31,9 +30,9 @@ async function loadDashboard(){
   `;
 }
 
-// ---- Products
+// ----- Products
 let P_PAGE = 1, P_SIZE = 20, P_QUERY = "";
-$("#pPageSize").onchange = () => { P_SIZE = +$("#pPageSize").value; P_PAGE = 1; loadProducts(); };
+$("#pPageSize").onchange = () => { P_SIZE = +$("#pPageSize").value; P_PAGE = 1; renderProducts(); };
 $("#pSearch").oninput = (e) => { P_QUERY = e.target.value.trim().toLowerCase(); P_PAGE = 1; renderProducts(); };
 $("#pReload").onclick = ()=> loadProducts();
 
@@ -124,7 +123,6 @@ function renderProducts(){
   $("#pPrev").onclick = () => { if (P_PAGE>1){ P_PAGE--; renderProducts(); } };
   $("#pNext").onclick = () => { if (start + P_SIZE < total){ P_PAGE++; renderProducts(); } };
 
-  // Actions
   $("#pTable").querySelectorAll("button").forEach(b => {
     const id = b.dataset.id;
     if (b.dataset.act === "edit") {
@@ -146,7 +144,7 @@ function renderProducts(){
   });
 }
 
-// ---- Orders
+// ----- Orders
 let O_PAGE = 1, O_STAT = "", O_QUERY = "";
 $("#oStatus").onchange = e => { O_STAT = e.target.value; O_PAGE = 1; loadOrders(); };
 $("#oQuery").oninput = e => { O_QUERY = e.target.value.trim(); O_PAGE = 1; loadOrders(); };
@@ -195,5 +193,31 @@ async function loadOrders(){
 }
 function chipClass(s){ return {placed:"info", paid:"ok", shipped:"info", delivered:"ok", cancelled:"danger"}[s] || ""; }
 
-// Default view
+// ----- Users (profiles)
+let U_QUERY = "";
+$("#uReload").onclick = ()=> loadUsers();
+$("#uQuery").oninput = e => { U_QUERY = e.target.value.trim(); loadUsers(); };
+async function loadUsers(page=1){
+  const params = new URLSearchParams({ page, pageSize: 50 });
+  if (U_QUERY) params.set("q", U_QUERY);
+  const r = await fetch(API + "/admin/profiles?" + params.toString(), { headers:{ "x-admin-key": key } }).then(r=>r.json());
+  if (!r.ok) return alert("Users error");
+  $("#uTable").innerHTML = `
+    <div class="thead"><div>TG User</div><div>Name</div><div>Username</div><div>Phone</div><div>Address</div><div>Slot</div><div>Geo</div><div>Updated</div></div>
+    ${r.items.map(p => `
+      <div class="trow">
+        <div>${p.tg_user_id}</div>
+        <div>${p.name||""}</div>
+        <div>@${p.username||""}</div>
+        <div>${p.phone||""}</div>
+        <div>${p.address||""}</div>
+        <div>${p.delivery_slot||""}</div>
+        <div>${(p.geo_lat && p.geo_lon) ? `${p.geo_lat.toFixed(5)}, ${p.geo_lon.toFixed(5)}` : ""}</div>
+        <div>${new Date(p.updated_at).toLocaleString()}</div>
+      </div>
+    `).join("")}
+  `;
+}
+
+// default
 loadDashboard();
