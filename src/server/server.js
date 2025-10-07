@@ -6,7 +6,8 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+// allow small base64 photo payloads (~<= 1.5MB). Adjust if needed.
+app.use(express.json({ limit: "4mb" }));
 app.use(
   cors({
     origin: [/\.vercel\.app$/, /localhost:\d+$/],
@@ -61,11 +62,13 @@ function verifyInitData(initData, botToken) {
   const ok = hash && crypto.timingSafeEqual(Buffer.from(calcHash), Buffer.from(hash));
   return { ok, user: params.get("user") };
 }
-const rupees = (p) => (p / 100).toFixed(2);
+const rupees = (p) => (p / 100).toFixed(2); // NOTE: returns number string, no currency symbol
+
 function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) {
   const params = new URLSearchParams({ pa, pn, am, cu, tn });
   return `upi://pay?${params.toString()}`;
 }
+
 async function tgSend(chatId, text, replyMarkup = null) {
   if (!process.env.BOT_TOKEN) return;
   const body = { chat_id: chatId, text };
@@ -75,6 +78,61 @@ async function tgSend(chatId, text, replyMarkup = null) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }).catch(()=>{});
+}
+
+// ===== NEW: admin notifications (text) =====
+async function notify(text) {
+  try {
+    const token = process.env.BOT_TOKEN;
+    const chatId = process.env.NOTIFY_CHAT_ID || process.env.OWNER_ID || "";
+    if (!token || !chatId || !text) return;
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch (e) {
+    console.warn("notify() failed:", e?.message || e);
+  }
+}
+
+// ===== NEW: photo forwarding helper (data URL -> actual Telegram photo upload) =====
+async function sendPhotoToAdmin(base64DataUrl, caption = "") {
+  try {
+    const token = process.env.BOT_TOKEN;
+    const chatId = process.env.NOTIFY_CHAT_ID || process.env.OWNER_ID || "";
+    if (!token || !chatId || !base64DataUrl) return;
+
+    // data URL parsing
+    const m = /^data:(.+);base64,(.*)$/.exec(base64DataUrl);
+    if (!m) {
+      return notify(`(Photo missing/invalid)\n${caption}`);
+    }
+    const mime = m[1];
+    const b64 = m[2];
+
+    // Convert to Blob via Buffer (Node 18+ has Blob/FormData globally)
+    const buf = Buffer.from(b64, "base64");
+    const file = new Blob([buf], { type: mime });
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    if (caption) form.append("caption", caption);
+    form.append("photo", file, "location.jpg");
+
+    const resp = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: "POST",
+      body: form,
+    });
+    const json = await resp.json();
+    if (!json.ok) {
+      console.warn("sendPhoto API error:", json);
+      // fallback to text notification if upload fails
+      await notify(`${caption}\n(photo upload failed)`);
+    }
+  } catch (e) {
+    console.warn("sendPhotoToAdmin failed:", e?.message || e);
+    await notify(`${caption}\n(photo upload failed)`);
+  }
 }
 
 // ===== Schema & seed =====
@@ -415,11 +473,11 @@ app.post("/cart/price", async (req, res) => {
   res.json({ ok: true, items: detailed, total, payments });
 });
 
-// ===== Place order (COD / UPI) =====
+// ===== Place order (COD / UPI / ONLINE) =====
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
-    const { initData, items = [], paymentMethod, form } = req.body || {};
+    const { initData, items = [], paymentMethod, form } = req.body || {}; // form may include {name,phone,address,slot,note,photoBase64}
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
     if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
@@ -437,7 +495,7 @@ app.post("/order", async (req, res) => {
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
-    // name/phone/address from profile fallback
+    // profile fallback
     const tgUser = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
     const prof = (await pool.query("select * from profiles where tg_user_id=$1", [tgUser?.id || null])).rows[0];
 
@@ -463,16 +521,52 @@ app.post("/order", async (req, res) => {
       await pool.query("insert into order_items(order_id,product_id,title,price,qty) values($1,$2,$3,$4,$5)", [orderId, d.id, d.title, d.price, d.qty]);
     }
 
-    if (paymentMethod === "COD") return res.json({ ok: true, orderId, total, method: "COD" });
+    // Notify owner/admin + optional photo forwarding
+    const caption =
+      `🆕 Order #${orderId} — ${form?.name || prof?.name || ""} · ${form?.phone || prof?.phone || ""}\n` +
+      `Total: ₹${(total/100).toFixed(2)} · Method: ${paymentMethod}\n` +
+      `Address: ${form?.address || prof?.address || ""}\nSlot: ${form?.slot || prof?.delivery_slot || ""}\nNote: ${form?.note || ""}`;
+    notify(caption);
+    if (form?.photoBase64) {
+      await sendPhotoToAdmin(form.photoBase64, `📷 Photo for order #${orderId}`);
+    }
+
+    if (paymentMethod === "COD") {
+      return res.json({ ok: true, orderId, total, method: "COD" });
+    }
 
     if (paymentMethod === "UPI") {
+      // UPI expects plain number string for amount
       const link = buildUpiLink({
         pa: process.env.UPI_PAYEE || "yourupi@okbank",
         pn: process.env.UPI_NAME || "South Asia Mart",
-        am: rupees(total),
+        am: (total / 100).toFixed(2),
         tn: `Order ${orderId}`,
       });
       return res.json({ ok: true, orderId, total, method: "UPI", upi: { link } });
+    }
+
+    if (paymentMethod === "ONLINE") {
+      if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok:false, error:"ONLINE_DISABLED" });
+      const prices = detailed.map(d => ({ label: d.title, amount: d.price * d.qty }));
+      const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "South Asia Mart Order",
+          description: `${form?.name || ""} · ${form?.phone || ""}`,
+          payload: "order-" + orderId,
+          provider_token: process.env.PROVIDER_TOKEN,
+          currency: "INR",
+          prices,
+          need_name: true,
+          need_shipping_address: true,
+          is_flexible: false,
+        }),
+      });
+      const json = await resp.json();
+      if (!json.ok) return res.status(500).json(json);
+      return res.json({ ok:true, link: json.result, total });
     }
 
     return res.status(400).json({ ok: false, error: "UNSUPPORTED_METHOD" });
@@ -529,7 +623,7 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-// ===== Telegram webhook (collect phone/location) =====
+// ===== Telegram webhook (contact/location helpers) =====
 app.post("/telegram/webhook", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
@@ -557,7 +651,7 @@ app.post("/telegram/webhook", async (req, res) => {
       await tgSend(chatId, "Thanks! Phone number saved ✅");
     }
 
-    // Location shared
+    // Location shared (optional; not triggered by your Mini App anymore)
     if (msg?.location) {
       await pool.query(`
         insert into profiles(tg_user_id, geo_lat, geo_lon, updated_at)
