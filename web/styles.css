@@ -91,3 +91,30 @@
 /* Login */
 .login-body { display:grid; place-items:center; min-height:100vh; background:#0b1320; }
 .login-card { width: min(420px, 92vw); background:#0e1726; border:1px solid #22314b; border-radius:16px; padding:20px; }
+
+.admin-shell { display:grid; grid-template-columns: 220px 1fr; gap:16px; padding:16px; }
+.sidebar { background:#0c1423; border:1px solid #1c2b46; border-radius:16px; padding:8px; position:sticky; top:64px; height:calc(100vh - 96px); overflow:auto; }
+.navlink { display:block; width:100%; text-align:left; padding:10px 12px; border-radius:10px; margin:4px 0; background:#0f1a2e; border:1px solid #162443; color:#cfe2ff; }
+.navlink.active { background:#183255; border-color:#29508d; }
+.topbar.admin { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:#0b1320; border-bottom:1px solid #1d2a45; position:sticky; top:0; z-index:10; }
+.main .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:16px; }
+.kpi { font-size:28px; font-weight:700; }
+.input { background:#0f1a2e; color:#eaf1ff; border:1px solid #1f2f4d; padding:10px; border-radius:10px; }
+.btn { background:#13223b; color:#d7e8ff; border:1px solid #24406e; padding:8px 12px; border-radius:10px; cursor:pointer; }
+.btn.primary { background:#14532d; border-color:#1f8a50; }
+.btn.danger { background:#3b1320; border-color:#6e2440; }
+.btn.sm { padding:4px 8px; font-size:12px; }
+.btn.active { outline:2px solid #3569b6; }
+.toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+.card { background:#0e1726; border:1px solid #22314b; border-radius:16px; padding:14px; }
+.table { display:grid; grid-template-columns: 1fr; gap:6px; }
+.thead, .trow { display:grid; grid-template-columns: 120px 160px 160px 120px 120px 120px 160px; gap:8px; align-items:center; }
+.thead { position:sticky; top:64px; background:#0e1726; padding:6px; border-bottom:1px solid #1f2f4d; z-index:5; }
+.trow { padding:6px; border-bottom:1px dashed #1a2945; }
+.pager { display:flex; gap:8px; align-items:center; margin-top:8px; }
+.chip { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid #2b426d; background:#0f1a2e; }
+.chip.ok { border-color:#1f8a50; color:#8ef0b8; }
+.chip.info { border-color:#3569b6; color:#a8d0ff; }
+.chip.warn { border-color:#c58a1f; color:#ffd590; }
+.grid2 { display:grid; grid-template-columns: 360px 1fr; gap:12px; }
+.muted { color:#9db7e3; }
