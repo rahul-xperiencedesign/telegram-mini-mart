@@ -1,183 +1,287 @@
-const tg = window.Telegram?.WebApp ?? null;
-const API = (p)=> (window.API_URL||"") + p;
+const API = window.API_URL;
+const tg = window.Telegram?.WebApp;
 
-let STATE = {
-  categories: [], products: [], filter:"All",
-  cart:{}, total:0, payments:{onlineAllowed:false, upiAllowed:true, codAllowed:true},
-  hasRestricted:false
-};
+// state
+let products = [];
+let categories = [];
+let cart = [];              // { id, title, price, qty, ageRestricted }
+let photoBase64 = "";       // optional upload
+let payments = { onlineAllowed:false, upiAllowed:true, codAllowed:true };
+let cartTotal = 0;
 
-const el = (s)=>document.querySelector(s);
-const rupees = (p)=>"₹"+(p/100).toFixed(2);
-const cartCount = ()=>Object.values(STATE.cart).reduce((a,b)=>a+b,0);
-const cartItems = ()=>Object.entries(STATE.cart).map(([id,qty])=>({id,qty}));
+const el = (id) => document.getElementById(id);
 
-if (tg){ tg.ready(); tg.expand(); tg.MainButton.setText("View Cart"); tg.MainButton.onClick(()=>openDrawer()); tg.MainButton.show(); }
+// UI refs
+const grid = el("grid");
+const filters = el("filters");
+const cartBadge = el("cartBadge");
+const drawer = el("drawer");
+const overlay = el("drawerOverlay");
+const openDrawerBtn = el("openDrawer");
+const closeDrawerBtn = el("closeDrawer");
+const backToShopBtn = el("backToShop");
 
-async function loadData(){
-  const [cats, prods] = await Promise.all([
-    fetch(API("/categories")).then(r=>r.json()),
-    fetch(API("/products")).then(r=>r.json())
-  ]);
-  STATE.categories = ["All", ...cats.categories];
-  STATE.products = prods.items;
-  renderFilters(); renderGrid(); updateBadges();
+const cartList = el("cartList");
+const nameInp = el("name");
+const phoneInp = el("phone");
+const addrInp = el("address");
+const slotSel = el("slot");
+const noteInp = el("note");
+
+const photoInput = el("photo");
+const photoPreview = el("photoPreview");
+
+const payOptions = el("payOptions");
+const totalRow = el("totalRow");
+const btnCOD = el("placeCOD");
+const btnUPI = el("payUPI");
+const btnOnline = el("payOnline");
+
+const ageGate = el("ageGate");
+const ageOk = el("ageOk");
+
+// ---------- helpers ----------
+function rupees(paise){ return "₹" + (paise/100).toFixed(2); }
+function updateBadge(){
+  const count = cart.reduce((s,i)=>s+i.qty,0);
+  cartBadge.textContent = count;
 }
-loadData();
 
-// ---------- Filters & Grid
+// ---------- data ----------
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts);
+  return r.json();
+}
+
+async function load(){
+  // categories
+  const catResp = await fetchJSON(`${API}/categories`);
+  if (catResp.ok) categories = catResp.categories || [];
+
+  // products
+  const proResp = await fetchJSON(`${API}/products`);
+  if (proResp.ok) products = proResp.items || [];
+
+  renderFilters();
+  renderGrid(products);
+  prefillFromTelegram();
+}
+
+function prefillFromTelegram(){
+  try{
+    const initStr = tg?.initData || "";
+    if (!initStr) return;
+    const usp = new URLSearchParams(initStr);
+    const userRaw = usp.get("user") || "{}";
+    const user = JSON.parse(decodeURIComponent(userRaw));
+    const parts = [user?.first_name, user?.last_name].filter(Boolean).join(" ");
+    if (parts && !nameInp.value) nameInp.value = parts;
+  }catch{}
+}
+
 function renderFilters(){
-  const f = el("#filters"); f.innerHTML="";
-  STATE.categories.forEach(c=>{
+  filters.innerHTML = "";
+  const make = (label, value) => {
     const b = document.createElement("button");
-    b.className = "filter" + (STATE.filter===c ? " active": "");
-    b.textContent = c;
-    b.onclick = ()=>{ STATE.filter=c; renderFilters(); renderGrid(); };
-    f.appendChild(b);
-  });
+    b.textContent = label;
+    b.onclick = () => {
+      [...filters.children].forEach(x=>x.classList.remove("active"));
+      b.classList.add("active");
+      renderGrid(value ? products.filter(p=>p.category===value) : products);
+    };
+    return b;
+  };
+  filters.appendChild(make("All", ""));
+  categories.forEach(c => filters.appendChild(make(c, c)));
 }
-function filtered(){ return STATE.filter==="All" ? STATE.products : STATE.products.filter(p=>p.category===STATE.filter); }
 
-function cardHtml(p){
-  const qty = STATE.cart[p.id]||0;
-  return `
-    <article class="card" data-id="${p.id}">
-      ${p.image ? `<img src="${p.image}" alt="">` : `<div style="height:110px;border-radius:10px;background:#101a2b;display:flex;align-items:center;justify-content:center;color:#7aa2ff;">${p.category}</div>`}
-      <h3>${p.title}</h3>
+function renderGrid(list){
+  grid.innerHTML = list.map(p => `
+    <article class="card product">
+      <h4>${p.title}</h4>
+      <div class="muted">${p.category}</div>
       <div class="price">${rupees(p.price)}</div>
-      <div class="actions">
-        ${qty===0 ? `<button class="btn primary add">ADD</button>` :
-          `<button class="btn minus">–</button><div class="btn">${qty}</div><button class="btn plus">+</button>`}
+      <div class="cta">
+        <button class="btn" data-add="${p.id}">Add</button>
       </div>
-    </article>`;
-}
+    </article>
+  `).join("");
 
-function renderGrid(){
-  const g = el("#grid");
-  g.innerHTML = filtered().map(cardHtml).join("");
-  g.querySelectorAll(".card").forEach(card=>{
-    const id = card.dataset.id;
-    const add = card.querySelector(".add");
-    const plus = card.querySelector(".plus");
-    const minus= card.querySelector(".minus");
-    add && (add.onclick = ()=>{ inc(id,1); });
-    plus && (plus.onclick = ()=>{ inc(id,1); });
-    minus&& (minus.onclick= ()=>{ inc(id,-1); });
+  grid.querySelectorAll("[data-add]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      addToCart(btn.dataset.add);
+    });
   });
 }
-function inc(id, d){ const n=(STATE.cart[id]||0)+d; if(n<=0) delete STATE.cart[id]; else STATE.cart[id]=n; renderGrid(); updateBadges(); }
 
-// ---------- Drawer & Pricing
-function openDrawer(){ el("#drawer").classList.add("open"); renderCart(); }
-function closeDrawer(){ el("#drawer").classList.remove("open"); }
-el("#openDrawer").onclick = openDrawer;
-el("#closeDrawer").onclick = closeDrawer;
+function addToCart(id){
+  const p = products.find(x=>x.id===id);
+  if (!p) return;
+  const found = cart.find(x=>x.id===id);
+  if (found) found.qty += 1;
+  else cart.push({ id:p.id, title:p.title, price:p.price, qty:1, ageRestricted: !!p.age_restricted });
+  updateBadge();
+}
+
+function changeQty(id, delta){
+  const it = cart.find(x=>x.id===id);
+  if (!it) return;
+  it.qty += delta;
+  if (it.qty <= 0) cart = cart.filter(x=>x.id!==id);
+  updateBadge();
+  renderCart();
+}
+
+// ---------- drawer ----------
+function openCart(){
+  renderCart(); // also recalculates server-side totals
+  overlay.classList.remove("hidden");
+  drawer.classList.remove("hidden");
+  drawer.setAttribute("aria-hidden","false");
+}
+function closeCart(){
+  overlay.classList.add("hidden");
+  drawer.classList.add("hidden");
+  drawer.setAttribute("aria-hidden","true");
+}
+
+openDrawerBtn?.addEventListener("click", openCart);
+overlay?.addEventListener("click", closeCart);
+closeDrawerBtn?.addEventListener("click", closeCart);
+backToShopBtn?.addEventListener("click", closeCart);
+document.addEventListener("keydown", (e)=>{ if(e.key==="Escape") closeCart(); });
+
+// photo upload → base64 preview
+photoInput?.addEventListener("change", async (e)=>{
+  const f = e.target.files?.[0];
+  if (!f) { photoBase64=""; photoPreview.classList.add("hidden"); photoPreview.innerHTML=""; return; }
+  if (f.size > 1.5*1024*1024) { alert("Photo is large (~>1.5MB). Please choose a smaller image."); return; }
+  const b64 = await fileToBase64(f);
+  photoBase64 = b64;
+  photoPreview.innerHTML = `<img src="${b64}" alt="location photo"/>`;
+  photoPreview.classList.remove("hidden");
+});
+function fileToBase64(file){
+  return new Promise(res=>{
+    const r = new FileReader();
+    r.onload = ()=>res(r.result);
+    r.readAsDataURL(file);
+  });
+}
 
 async function renderCart(){
-  const res = await fetch(API("/cart/price"), { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({items:cartItems()}) });
-  const data = await res.json();
-  STATE.total = data.total; STATE.payments = data.payments;
-  STATE.hasRestricted = data.items.some(i=>i.ageRestricted);
-
-  const list = el("#cartList");
-  list.innerHTML = data.items.length ? data.items.map(i=>`
-    <div class="row" data-id="${i.id}">
-      <div style="flex:1">
-        <div>${i.title}</div>
-        <small>${rupees(i.price)} each ${i.ageRestricted?'<span class="warn">· age-restricted</span>':''}</small>
+  cartList.innerHTML = cart.length ? cart.map(it=>`
+    <div class="line">
+      <div>
+        <div><b>${it.title}</b></div>
+        <div class="muted">${rupees(it.price)} ${it.ageRestricted ? "· <span class='warn'>RESTRICTED</span>" : ""}</div>
       </div>
       <div class="qty">
-        <button class="btn minus">–</button>
-        <div class="btn">${STATE.cart[i.id]||0}</div>
-        <button class="btn plus">+</button>
+        <button class="iconbtn" data-dec="${it.id}">–</button>
+        <div>${it.qty}</div>
+        <button class="iconbtn" data-inc="${it.id}">+</button>
       </div>
-      <div>${rupees(i.price*(STATE.cart[i.id]||0))}</div>
     </div>
-  `).join("") : `<div class="row"><span>Your cart is empty.</span></div>`;
+  `).join("") : `<div class="muted">Your cart is empty.</div>`;
 
-  list.querySelectorAll(".row").forEach(r=>{
-    const id = r.dataset.id;
-    r.querySelector(".plus").onclick = ()=>{ inc(id,1); renderCart(); };
-    r.querySelector(".minus").onclick= ()=>{ inc(id,-1); renderCart(); };
+  cartList.querySelectorAll("[data-inc]").forEach(b=>b.addEventListener("click",()=>{changeQty(b.dataset.inc, +1)}));
+  cartList.querySelectorAll("[data-dec]").forEach(b=>b.addEventListener("click",()=>{changeQty(b.dataset.dec, -1)}));
+
+  // Ask server for price + allowed payment methods
+  const body = { items: cart.map(i=>({ id:i.id, qty:i.qty })) };
+  const priceResp = await fetchJSON(`${API}/cart/price`, {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(body)
   });
 
-  // Payment buttons & age gate behavior
-  const pay = el("#payOptions");
-  const onlineBtn = STATE.payments.onlineAllowed ? `<button class="paybtn online" id="payOnline">Pay Online · ${rupees(STATE.total)}</button>` : "";
-  const upiBtn    = STATE.payments.upiAllowed    ? `<button class="paybtn upi" id="payUPI">Scan & Pay (UPI) · ${rupees(STATE.total)}</button>` : "";
-  const codBtn    = STATE.payments.codAllowed    ? `<button class="paybtn cod" id="payCOD">Cash on Delivery · ${rupees(STATE.total)}</button>` : "";
-  pay.innerHTML = onlineBtn + upiBtn + codBtn +
-    (STATE.payments.onlineAllowed ? "" : `<small class="warn">Online pay hidden (restricted items or provider not connected).</small>`);
+  payments = priceResp.ok ? priceResp.payments : { onlineAllowed:false, upiAllowed:true, codAllowed:true };
+  cartTotal = priceResp.ok ? (priceResp.total || 0) : 0;
+  totalRow.textContent = `Total: ${rupees(cartTotal)}`;
 
-  el("#payOnline") && (el("#payOnline").onclick = () => proceed("ONLINE"));
-  el("#payUPI")    && (el("#payUPI").onclick    = () => proceed("UPI"));
-  el("#payCOD")    && (el("#payCOD").onclick    = () => proceed("COD"));
+  // Render button visibility
+  btnCOD.classList.toggle("hidden", !payments.codAllowed);
+  btnUPI.classList.toggle("hidden", !payments.upiAllowed);
+  btnOnline.classList.toggle("hidden", !payments.onlineAllowed);
+
+  // Show chips
+  payOptions.innerHTML = `
+    <span class="chip">${payments.codAllowed ? "✅ COD available" : "❌ COD disabled"}</span>
+    <span class="chip">${payments.upiAllowed ? "✅ UPI allowed" : "❌ UPI blocked"}</span>
+    <span class="chip">${payments.onlineAllowed ? "✅ Online pay" : "❌ Online pay disabled"}</span>
+  `;
+
+  // age-restricted banner → show age gate once per open
+  if (cart.some(i=>i.ageRestricted)) {
+    ageGate.classList.remove("hidden");
+  } else {
+    ageGate.classList.add("hidden");
+  }
 }
+ageOk?.addEventListener("click", ()=> ageGate.classList.add("hidden"));
 
-function updateBadges(){ el("#cartBadge").textContent = cartCount(); if (tg) tg.MainButton.setText(`View Cart (${cartCount()})`); }
-
-// ---------- Collect form & dispatch by method
-function formData(){
+// ---------- order flows ----------
+function getForm(){
   return {
-    name: el("#name").value.trim(),
-    phone: el("#phone").value.trim(),
-    address: el("#address").value.trim(),
-    slot: el("#slot").value,
-    note: el("#note").value.trim()
+    name: nameInp.value.trim(),
+    phone: phoneInp.value.trim(),
+    address: addrInp.value.trim(),
+    slot: slotSel.value.trim(),
+    note: noteInp.value.trim(),
+    photoBase64 // optional
   };
 }
-function validateForm(f){
-  if (!f.name || !f.phone || !f.address || !f.slot) return "Please fill name, phone, address and slot.";
-  return "";
+function getItems(){
+  return cart.map(i=>({ id:i.id, qty:i.qty }));
+}
+function initHeaders(){
+  const initData = tg?.initData || "";
+  const h = { "Content-Type": "application/json" };
+  if (initData) h["x-telegram-initdata"] = initData; // server will also accept in body
+  return h;
 }
 
-async function proceed(method){
-  const f = formData();
-  const err = validateForm(f);
-  if (err) return alert(err);
+async function placeOrder(paymentMethod){
+  if (!cart.length) return alert("Cart is empty.");
+  const form = getForm();
+  if (!form.name || !form.phone || !form.address || !form.slot)
+    return alert("Please fill name, phone, address and slot.");
 
-  // Age gate: if cart has restricted items, show modal & only allow COD
-  if (STATE.hasRestricted && method!=="COD"){
-    el("#ageGate").classList.remove("hidden");
-    el("#ageOk").onclick = ()=>{ el("#ageGate").classList.add("hidden"); }; // force user to press COD
-    return;
+  const resp = await fetchJSON(`${API}/order`, {
+    method:"POST",
+    headers: initHeaders(),
+    body: JSON.stringify({
+      initData: tg?.initData || "",
+      items: getItems(),
+      paymentMethod,
+      form
+    })
+  });
+
+  if (!resp.ok) return alert(resp.error || "Order failed");
+
+  if (paymentMethod === "COD") {
+    alert(`Order #${resp.orderId} placed. Pay cash on delivery.`);
+    cart = []; updateBadge(); closeCart();
+  } else if (paymentMethod === "UPI") {
+    if (resp.upi?.link) {
+      window.location.href = resp.upi.link; // opens UPI app
+    } else {
+      alert("Could not get UPI link.");
+    }
+  } else if (paymentMethod === "ONLINE") {
+    if (resp.link) {
+      window.location.href = resp.link; // opens Telegram invoice page
+    } else {
+      alert("Could not create invoice link.");
+    }
   }
-
-  if (method==="ONLINE"){ return payOnline(f); }
-  if (method==="UPI"){ return payUPI(f); }
-  if (method==="COD"){ return payCOD(f); }
 }
 
-// ---------- Payment handlers with form
-async function payOnline(form){
-  const res = await fetch(API("/checkout"), {
-    method:"POST", headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ initData: tg?.initData || "", items: cartItems(), form })
-  });
-  const data = await res.json();
-  if (!data.ok) return alert("Online payment disabled or failed: " + (data.error||""));
-  tg?.openInvoice(data.link, (status) => {
-    tg.showPopup({ title:"Payment", message:`Status: ${status}`, buttons:[{type:"ok"}] });
-  });
-}
+btnCOD?.addEventListener("click", ()=>placeOrder("COD"));
+btnUPI?.addEventListener("click", ()=>placeOrder("UPI"));
+btnOnline?.addEventListener("click", ()=>placeOrder("ONLINE"));
 
-async function payUPI(form){
-  const res = await fetch(API("/order"), {
-    method:"POST", headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ initData: tg?.initData || "", items: cartItems(), paymentMethod:"UPI", form })
-  });
-  const data = await res.json();
-  if (!data.ok) return alert("UPI failed: " + (data.error||""));
-  window.location.href = data.upi.link;
-}
-
-async function payCOD(form){
-  const res = await fetch(API("/order"), {
-    method:"POST", headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ initData: tg?.initData || "", items: cartItems(), paymentMethod:"COD", form })
-  });
-  const data = await res.json();
-  if (!data.ok) return alert("COD failed: " + (data.error||""));
-  tg?.showPopup({ title:"Order placed", message:"COD selected. Pay at delivery.", buttons:[{type:"ok"}] });
-  el("#drawer").classList.remove("open");
-}
+// ---------- init ----------
+load().catch(()=>{});
+updateBadge();
