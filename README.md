@@ -1,5 +1,6 @@
 > 📘 **Project Docs:** [Full Technical Overview →](./docs/PROJECT_OVERVIEW.md)
 # telegram-mini-mart
+![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)
 It is a mini app on telegram which serves the purpose of a online mart
 
 ## 📘 Documentation
