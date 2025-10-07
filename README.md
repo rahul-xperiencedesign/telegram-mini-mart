@@ -1,3 +1,4 @@
+> 📘 **Project Docs:** [Full Technical Overview →](./docs/PROJECT_OVERVIEW.md)
 # telegram-mini-mart
 It is a mini app on telegram which serves the purpose of a online mart
 
