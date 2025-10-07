@@ -1,6 +1,6 @@
 {
   "name": "telegram-mini-mart",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "South Asia Mart — a Telegram Mini App for ordering groceries and essentials.",
   "main": "src/server/server.js",
   "type": "module",
