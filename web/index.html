@@ -2,39 +2,80 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>South Asia Mart</title>
-
   <link rel="stylesheet" href="./styles.css"/>
-
-  <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <!-- Backend base URL -->
-  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
-
-  <style>
-    /* Small helpers in case styles.css doesn’t define them */
-    .row.inline { display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; }
-    .muted { color:#9db7e3; font-size:12px; }
-    .btn.xs { padding:6px 8px; font-size:12px; }
-    .statusline { min-height: 16px; }
-    .ok { color:#8ef0b8; }
-    .warn { color:#ffd590; }
-    .geo-grid { display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; }
-    .hidden-input { display:none; }
-  </style>
+  <script>
+    window.API_URL = "https://telegram-mini-mart.onrender.com";
+  </script>
 </head>
-<body>
+<body class="bg page">
   <header class="topbar">
     <div class="brand">South Asia Mart</div>
-    <div class="cartbadge" id="cartBadge">0</div>
+    <button id="openDrawer" class="cartbtn" aria-label="View cart">
+      <span id="cartBadge" class="badge">0</span> 🛒
+    </button>
   </header>
 
   <main class="wrap">
     <div id="filters" class="filters"></div>
     <section id="grid" class="grid"></section>
   </main>
+
+  <!-- Drawer (Cart) -->
+  <div id="drawerOverlay" class="overlay hidden"></div>
+  <aside id="drawer" class="drawer hidden" aria-hidden="true">
+    <div class="drawer-head">
+      <button id="backToShop" class="btn-ghost">← Continue shopping</button>
+      <h2>Your Order</h2>
+      <button id="closeDrawer" class="iconbtn" aria-label="Close">✕</button>
+    </div>
+
+    <div class="drawer-body">
+      <div id="cartList" class="cartlist"></div>
+
+      <section class="card">
+        <h3>Delivery Details</h3>
+
+        <div class="row"><input id="name" placeholder="Full name" autocomplete="name"/></div>
+        <div class="row"><input id="phone" placeholder="Phone" inputmode="tel" autocomplete="tel"/></div>
+        <div class="row"><textarea id="address" placeholder="Address (street, building, floor)"></textarea></div>
+
+        <div class="row">
+          <label class="file">
+            <input id="photo" type="file" accept="image/*" capture="environment"/>
+            <span>Upload location photo (optional)</span>
+          </label>
+          <div id="photoPreview" class="thumb hidden"></div>
+        </div>
+
+        <div class="row">
+          <select id="slot">
+            <option value="">Choose delivery slot</option>
+            <option>Today 6–8 PM</option>
+            <option>Today 8–10 PM</option>
+            <option>Tomorrow 10–12 AM</option>
+          </select>
+        </div>
+
+        <div class="row"><textarea id="note" placeholder="Order note (optional)…"></textarea></div>
+      </section>
+
+      <section class="card">
+        <h3>Payment</h3>
+        <div id="payOptions" class="payopts"></div>
+        <div id="totalRow" class="totalrow">Total: ₹0.00</div>
+      </section>
+    </div>
+
+    <!-- Sticky Footer inside Drawer -->
+    <div class="drawer-foot">
+      <button id="placeCOD" class="paybtn cod hidden">Place COD Order</button>
+      <button id="payUPI"  class="paybtn upi hidden">Pay via UPI</button>
+      <button id="payOnline" class="paybtn online hidden">Pay Online</button>
+    </div>
+  </aside>
 
   <!-- Age Gate -->
   <div id="ageGate" class="modal hidden">
@@ -45,212 +86,6 @@
     </div>
   </div>
 
-  <!-- Cart drawer -->
-  <aside id="drawer" class="drawer">
-    <div class="drawer-head">
-      <h2>Your Order</h2>
-      <button id="closeDrawer" class="iconbtn">✕</button>
-    </div>
-
-    <div id="cartList" class="cartlist"></div>
-
-    <div class="note">
-      <textarea id="note" placeholder="Add comment..."></textarea>
-    </div>
-
-    <!-- Checkout form -->
-    <section class="card">
-      <h3>Delivery Details</h3>
-
-      <!-- Name -->
-      <div class="row">
-        <input id="name" placeholder="Full Name"/>
-      </div>
-
-      <!-- Phone + actions -->
-      <div class="row inline">
-        <input id="phone" placeholder="Phone"/>
-        <button id="btnGetPhone" class="btn xs">Get from Telegram</button>
-        <button id="btnRefreshProfile" class="btn xs">Refresh</button>
-      </div>
-      <div id="phone_hint" class="muted statusline"></div>
-
-      <!-- Address -->
-      <div class="row">
-        <textarea id="address" placeholder="Address"></textarea>
-      </div>
-
-      <!-- Delivery slot -->
-      <div class="row">
-        <select id="slot">
-          <option value="">Choose delivery slot</option>
-          <option>Today 6–8 PM</option>
-          <option>Today 8–10 PM</option>
-          <option>Tomorrow 10–12 AM</option>
-          <option>Tomorrow 4–6 PM</option>
-        </select>
-      </div>
-
-      <!-- Location (optional) -->
-      <div class="row">
-        <div class="geo-grid">
-          <input id="geo_lat" class="input" placeholder="Latitude"/>
-          <input id="geo_lon" class="input" placeholder="Longitude"/>
-          <button id="btnUseLocation" class="btn xs">Use my location</button>
-        </div>
-      </div>
-      <div id="geo_status" class="muted statusline"></div>
-
-      <!-- Save profile (to keep for next time) -->
-      <div class="row">
-        <button id="btnSaveProfile" class="btn xs">Save details</button>
-        <span id="save_status" class="muted statusline"></span>
-      </div>
-    </section>
-
-    <div id="payOptions" class="payopts"></div>
-  </aside>
-
-  <button id="openDrawer" class="fab">View Cart</button>
-
-  <!-- Your existing storefront logic -->
   <script src="./app.js"></script>
-
-  <!-- ===== Prefill & profile helper logic (new) ===== -->
-  <script>
-    // Set your bot username (for deep-link to request phone in chat)
-    const BOT_USERNAME = "@SouthAsiaMartBot"; // ← change to your actual bot username
-
-    // Helpers
-    const $ = s => document.querySelector(s);
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-    function getInitData() {
-      const tg = window.Telegram?.WebApp;
-      if (tg?.initData) return tg.initData; // Running inside Telegram
-      // Testing in browser (optional): allow passing tgWebAppData via URL param
-      const u = new URL(location.href);
-      return u.searchParams.get("tgWebAppData") || "";
-    }
-
-    async function apiPost(path, body) {
-      const res = await fetch(window.API_URL + path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body || {})
-      });
-      // ignore non-JSON cases gracefully
-      try { return await res.json(); } catch { return { ok:false, error:"BAD_RESPONSE" }; }
-    }
-
-    function setIfBlank(sel, val) {
-      const el = $(sel);
-      if (!el) return;
-      if ((el.value ?? "") === "") el.value = val || "";
-    }
-
-    async function loadProfileAndPrefill() {
-      $("#save_status").textContent = "Loading profile…";
-      const r = await apiPost("/me", { initData: getInitData() });
-      if (!r.ok) {
-        $("#save_status").textContent = "Profile not available yet. If you are testing in browser, supply ?tgWebAppData=…";
-        $("#save_status").classList.add("warn");
-        return;
-      }
-      const p = r.profile || {};
-      setIfBlank("#name", p.name);
-      setIfBlank("#phone", p.phone);
-      setIfBlank("#address", p.address);
-      setIfBlank("#slot", p.delivery_slot);
-      if (p.geo) {
-        setIfBlank("#geo_lat", p.geo.lat);
-        setIfBlank("#geo_lon", p.geo.lon);
-      }
-      $("#save_status").textContent = "Prefilled ✓";
-      $("#save_status").classList.add("ok");
-      setTimeout(()=>$("#save_status").textContent="", 1500);
-    }
-
-    async function saveProfile() {
-      const geo = ($("#geo_lat").value && $("#geo_lon").value)
-        ? { lat: +$("#geo_lat").value, lon: +$("#geo_lon").value }
-        : null;
-
-      const body = {
-        initData: getInitData(),
-        phone: $("#phone").value.trim() || null,
-        address: $("#address").value.trim() || null,
-        delivery_slot: $("#slot").value || null,
-        geo
-      };
-      const r = await apiPost("/me/update", body);
-      if (!r.ok) return alert("Could not save profile.");
-      $("#save_status").textContent = "Profile saved ✓";
-      $("#save_status").classList.add("ok");
-      setTimeout(()=>$("#save_status").textContent="", 1500);
-    }
-
-    function requestPhoneViaTelegram() {
-      const link = `https://t.me/${BOT_USERNAME}?start=sharephone`;
-      if (window.Telegram?.WebApp?.openTelegramLink) {
-        Telegram.WebApp.openTelegramLink(link);
-      } else {
-        window.open(link, "_blank"); // fallback in browser
-      }
-      $("#phone_hint").innerHTML = "After sharing your phone in Telegram, tap <b>Refresh</b>.";
-    }
-
-    async function refreshProfile() {
-      $("#save_status").textContent = "Refreshing…";
-      await sleep(800);
-      await loadProfileAndPrefill();
-    }
-
-    function useCurrentLocation() {
-      if (!navigator.geolocation) return alert("Geolocation not supported on this device.");
-      $("#geo_status").textContent = "Requesting location…";
-      navigator.geolocation.getCurrentPosition(
-        pos => {
-          $("#geo_lat").value = pos.coords.latitude.toFixed(6);
-          $("#geo_lon").value = pos.coords.longitude.toFixed(6);
-          $("#geo_status").textContent = "Location captured ✓";
-          $("#geo_status").classList.add("ok");
-        },
-        err => {
-          console.error(err);
-          $("#geo_status").textContent = "Unable to get location";
-        },
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-      );
-    }
-
-    // Wire buttons
-    document.addEventListener("DOMContentLoaded", async () => {
-      // Expand Telegram WebApp canvas (safe no-op in browser)
-      try { Telegram?.WebApp?.ready(); Telegram?.WebApp?.expand(); } catch {}
-
-      // Prefill on load
-      await loadProfileAndPrefill();
-
-      // Button handlers
-      $("#btnGetPhone").onclick = requestPhoneViaTelegram;
-      $("#btnRefreshProfile").onclick = refreshProfile;
-      $("#btnUseLocation").onclick = useCurrentLocation;
-      $("#btnSaveProfile").onclick = saveProfile;
-
-      // (Optional) Update a total banner inside drawer from server pricing
-      try {
-        const stored = localStorage.getItem("cart_items");
-        if (stored) {
-          const items = JSON.parse(stored);
-          const priced = await apiPost("/cart/price", { items });
-          if (priced.ok && typeof priced.total === "number") {
-            // If you want to display somewhere in the drawer head:
-            // document.querySelector(".drawer-head h2").textContent = `Your Order — ₹${(priced.total/100).toFixed(2)}`;
-          }
-        }
-      } catch {}
-    });
-  </script>
 </body>
 </html>
