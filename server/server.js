@@ -2,11 +2,11 @@
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
-import pkg from "pg";                 // postgres client (pg)
+import pkg from "pg";
 const { Pool } = pkg;
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 app.use(
   cors({
     origin: [/\.vercel\.app$/, /localhost:\d+$/],
@@ -14,29 +14,26 @@ app.use(
   })
 );
 
-// ===== Single pool declaration (do NOT redeclare anywhere) =====
+// ===== DB pool (single instance) =====
 let pool = null;
 if (process.env.DATABASE_URL) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // required for Render external PG
+    ssl: { rejectUnauthorized: false },
   });
 } else {
   console.warn("DATABASE_URL not set — DB endpoints will return DB_NOT_CONFIGURED.");
 }
 
-// ===== TEMP debug routes (remove later) =====
+// ===== Debug routes =====
 app.get("/__envcheck", (req, res) => {
   const s = process.env.DATABASE_URL || "";
   let info = null;
-  try {
-    const u = new URL(s);
-    info = { protocol: u.protocol, host: u.hostname, port: u.port };
-  } catch { info = null; }
+  try { const u = new URL(s); info = { protocol: u.protocol, host: u.hostname, port: u.port }; } catch {}
   res.json({ ok: true, hasDATABASE_URL: !!s, db: info });
 });
 
-app.get("/__dbping", async (req, res) => {
+app.get("/__dbping", async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
     const r = await pool.query("select 1 as ok");
@@ -69,6 +66,16 @@ function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) 
   const params = new URLSearchParams({ pa, pn, am, cu, tn });
   return `upi://pay?${params.toString()}`;
 }
+async function tgSend(chatId, text, replyMarkup = null) {
+  if (!process.env.BOT_TOKEN) return;
+  const body = { chat_id: chatId, text };
+  if (replyMarkup) body.reply_markup = replyMarkup;
+  await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(()=>{});
+}
 
 // ===== Schema & seed =====
 const SCHEMA_SQL = `
@@ -92,8 +99,10 @@ create table if not exists orders (
   note text,
   total integer not null,
   payment_method text not null,
-  status text not null default 'placed', -- placed, paid, shipped, delivered, cancelled
-  created_at timestamptz not null default now()
+  status text not null default 'placed',
+  created_at timestamptz not null default now(),
+  geo_lat double precision,
+  geo_lon double precision
 );
 
 create table if not exists order_items (
@@ -103,6 +112,19 @@ create table if not exists order_items (
   title text,
   price integer not null,
   qty integer not null
+);
+
+-- Profile store keyed by Telegram user id
+create table if not exists profiles (
+  tg_user_id bigint primary key,
+  name text,
+  username text,
+  phone text,
+  address text,
+  geo_lat double precision,
+  geo_lon double precision,
+  delivery_slot text,
+  updated_at timestamptz not null default now()
 );
 `;
 
@@ -131,31 +153,31 @@ app.post("/verify", (req, res) => {
   res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
 });
 
-// ===== Admin (init/seed, secure by header) =====
+// ===== Admin auth =====
 function requireAdmin(req, res, next) {
   const key = req.headers["x-admin-key"];
   if (!key || key !== process.env.ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
   next();
 }
 
+// ===== Admin: schema + seed =====
 app.post("/admin/init", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query(SCHEMA_SQL);
   res.json({ ok: true });
 });
-
 app.post("/admin/seed", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query(SEED_SQL);
   res.json({ ok: true });
 });
 
+// ===== Admin: products =====
 app.get("/admin/products", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const q = await pool.query("select * from products order by title");
   res.json({ ok: true, items: q.rows });
 });
-
 app.post("/admin/products", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const { id, title, price, category, image = "", age_restricted = false, stock = 999 } = req.body || {};
@@ -168,87 +190,11 @@ app.post("/admin/products", requireAdmin, async (req, res) => {
   );
   res.json({ ok: true });
 });
-
 app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query("delete from products where id=$1", [req.params.id]);
   res.json({ ok: true });
 });
-
-// ---------- Admin: Stats (dashboard)
-app.get("/admin/stats", requireAdmin, async (_req, res) => {
-  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
-  try {
-    const prod = await pool.query("select count(*)::int as count from products");
-    const rev  = await pool.query("select coalesce(sum(total),0)::int as revenue from orders where status in ('paid','placed')");
-    const last7 = await pool.query(`
-      select to_char(date_trunc('day', created_at),'YYYY-MM-DD') as day,
-             count(*)::int as orders, coalesce(sum(total),0)::int as revenue
-      from orders where created_at > now() - interval '7 days'
-      group by 1 order by 1
-    `);
-    const low = await pool.query("select id,title,stock from products where stock <= 20 order by stock asc limit 20");
-    res.json({
-      ok: true,
-      product_count: prod.rows[0].count,
-      revenue: rev.rows[0].revenue,
-      last7: last7.rows,
-      low_stock: low.rows
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok:false, error:"STATS_FAILED" });
-  }
-});
-
-// ---------- Admin: Orders list with filters + pagination
-app.get("/admin/orders", requireAdmin, async (req, res) => {
-  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
-  try {
-    const { status, q, page = "1", pageSize = "20" } = req.query;
-    const limit = Math.min(parseInt(pageSize, 10) || 20, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
-
-    const where = [];
-    const params = [];
-    if (status) { params.push(status); where.push(`status = $${params.length}`); }
-    if (q) {
-      params.push(`%${q}%`);
-      const i = params.length;
-      where.push(`(name ilike $${i} or phone ilike $${i} or address ilike $${i})`);
-    }
-    const whereSql = where.length ? `where ${where.join(" and ")}` : "";
-
-    const items = (await pool.query(
-      `select id, name, phone, address, slot, note, total, status, created_at
-       from orders ${whereSql}
-       order by created_at desc
-       limit ${limit} offset ${offset}`,
-      params
-    )).rows;
-
-    const total = (await pool.query(
-      `select count(*)::int as count from orders ${whereSql}`, params
-    )).rows[0].count;
-
-    res.json({ ok:true, items, page:+page, pageSize:limit, total });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok:false, error:"ORDERS_FAILED" });
-  }
-});
-
-// ---------- Admin: Update order status
-app.put("/admin/orders/:id/status", requireAdmin, async (req, res) => {
-  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
-  const allowed = ["placed","paid","shipped","delivered","cancelled"];
-  const { status } = req.body || {};
-  if (!allowed.includes(status)) return res.status(400).json({ ok:false, error:"INVALID_STATUS" });
-  await pool.query("update orders set status=$1 where id=$2", [status, req.params.id]);
-  res.json({ ok:true });
-});
-
-// ---------- Admin: Bulk upsert products
 app.post("/admin/products/bulk", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const { items = [] } = req.body || {};
@@ -277,13 +223,95 @@ app.post("/admin/products/bulk", requireAdmin, async (req, res) => {
   }
 });
 
+// ===== Admin: stats + orders + profiles =====
+app.get("/admin/stats", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const prod = await pool.query("select count(*)::int as count from products");
+    const rev  = await pool.query("select coalesce(sum(total),0)::int as revenue from orders where status in ('paid','placed')");
+    const last7 = await pool.query(`
+      select to_char(date_trunc('day', created_at),'YYYY-MM-DD') as day,
+             count(*)::int as orders, coalesce(sum(total),0)::int as revenue
+      from orders where created_at > now() - interval '7 days'
+      group by 1 order by 1
+    `);
+    const low = await pool.query("select id,title,stock from products where stock <= 20 order by stock asc limit 20");
+    res.json({ ok:true,
+      product_count: prod.rows[0].count,
+      revenue: rev.rows[0].revenue,
+      last7: last7.rows,
+      low_stock: low.rows
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"STATS_FAILED" });
+  }
+});
+app.get("/admin/orders", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const { status, q, page = "1", pageSize = "20" } = req.query;
+    const limit = Math.min(parseInt(pageSize, 10) || 20, 100);
+    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+
+    const where = [];
+    const params = [];
+    if (status) { params.push(status); where.push(`status = $${params.length}`); }
+    if (q) {
+      params.push(`%${q}%`);
+      const i = params.length;
+      where.push(`(name ilike $${i} or phone ilike $${i} or address ilike $${i})`);
+    }
+    const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+
+    const items = (await pool.query(
+      `select id, name, phone, address, slot, note, total, status, created_at, geo_lat, geo_lon
+       from orders ${whereSql}
+       order by created_at desc
+       limit ${limit} offset ${offset}`,
+      params
+    )).rows;
+
+    const total = (await pool.query(
+      `select count(*)::int as count from orders ${whereSql}`, params
+    )).rows[0].count;
+
+    res.json({ ok:true, items, page:+page, pageSize:limit, total });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"ORDERS_FAILED" });
+  }
+});
+app.put("/admin/orders/:id/status", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const allowed = ["placed","paid","shipped","delivered","cancelled"];
+  const { status } = req.body || {};
+  if (!allowed.includes(status)) return res.status(400).json({ ok:false, error:"INVALID_STATUS" });
+  await pool.query("update orders set status=$1 where id=$2", [status, req.params.id]);
+  res.json({ ok:true });
+});
+app.get("/admin/profiles", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const { page = "1", pageSize = "50", q } = req.query;
+  const limit = Math.min(parseInt(pageSize, 10) || 50, 200);
+  const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+  const params = [];
+  let where = "";
+  if (q) { params.push(`%${q}%`); where = `where (name ilike $1 or phone ilike $1 or username ilike $1)`; }
+  const rows = (await pool.query(
+    `select tg_user_id, name, username, phone, address, delivery_slot, geo_lat, geo_lon, updated_at
+     from profiles ${where} order by updated_at desc limit ${limit} offset ${offset}`, params
+  )).rows;
+  const total = (await pool.query(`select count(*)::int as c from profiles ${where}`, params)).rows[0].c;
+  res.json({ ok:true, items: rows, page:+page, pageSize:limit, total });
+});
+
 // ===== Public catalog =====
 app.get("/categories", async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const q = await pool.query("select distinct category from products order by category");
   res.json({ ok: true, categories: q.rows.map(r => r.category) });
 });
-
 app.get("/products", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const cat = req.query.category;
@@ -291,6 +319,71 @@ app.get("/products", async (req, res) => {
     ? await pool.query("select * from products where category=$1 order by title", [cat])
     : await pool.query("select * from products order by title");
   res.json({ ok: true, items: q.rows });
+});
+
+// ===== Profiles API for WebApp (auto prefill) =====
+// POST /me  { initData }  -> returns { name, username, phone, address, geo, delivery_slot }
+app.post("/me", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const { initData } = req.body || {};
+    const v = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!v.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
+
+    const tgUser = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
+    const id = tgUser?.id;
+    const name = [tgUser?.first_name, tgUser?.last_name].filter(Boolean).join(" ").trim() || tgUser?.username || "Customer";
+
+    // upsert skeleton profile if missing
+    await pool.query(`
+      insert into profiles(tg_user_id, name, username)
+      values($1,$2,$3)
+      on conflict (tg_user_id) do update set name=coalesce(profiles.name, excluded.name),
+                                           username=coalesce(excluded.username, profiles.username)
+    `, [id, name, tgUser?.username || null]);
+
+    const row = (await pool.query("select * from profiles where tg_user_id=$1", [id])).rows[0];
+    res.json({ ok:true, profile: {
+      tg_user_id: id,
+      name: row?.name || name,
+      username: row?.username || tgUser?.username || null,
+      phone: row?.phone || "",
+      address: row?.address || "",
+      delivery_slot: row?.delivery_slot || "",
+      geo: (row?.geo_lat && row?.geo_lon) ? { lat: row.geo_lat, lon: row.geo_lon } : null
+    }});
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"ME_FAILED" });
+  }
+});
+
+// POST /me/update  { initData, phone, address, delivery_slot, geo:{lat,lon} }
+app.post("/me/update", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const { initData, phone, address, delivery_slot, geo } = req.body || {};
+    const v = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!v.ok) return res.status(401).json({ ok:false, error:"INVALID_INIT_DATA" });
+    const id = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"))?.id;
+
+    await pool.query(`
+      insert into profiles(tg_user_id, phone, address, delivery_slot, geo_lat, geo_lon, updated_at)
+      values($1,$2,$3,$4,$5,$6, now())
+      on conflict (tg_user_id) do update set
+        phone = coalesce($2, profiles.phone),
+        address = coalesce($3, profiles.address),
+        delivery_slot = coalesce($4, profiles.delivery_slot),
+        geo_lat = coalesce($5, profiles.geo_lat),
+        geo_lon = coalesce($6, profiles.geo_lon),
+        updated_at = now()
+    `, [id, phone || null, address || null, delivery_slot || null, geo?.lat ?? null, geo?.lon ?? null]);
+
+    res.json({ ok:true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"ME_UPDATE_FAILED" });
+  }
 });
 
 // ===== Price cart on server =====
@@ -344,11 +437,26 @@ app.post("/order", async (req, res) => {
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
-    const user = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
+    // name/phone/address from profile fallback
+    const tgUser = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
+    const prof = (await pool.query("select * from profiles where tg_user_id=$1", [tgUser?.id || null])).rows[0];
+
     const ins = await pool.query(
-      `insert into orders(tg_user_id,name,phone,address,slot,note,total,payment_method,status)
-       values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
-      [user?.id || null, form?.name || "", form?.phone || "", form?.address || "", form?.slot || "", form?.note || "", total, paymentMethod, "placed"]
+      `insert into orders(tg_user_id,name,phone,address,slot,note,total,payment_method,status,geo_lat,geo_lon)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
+      [
+        tgUser?.id || null,
+        form?.name || prof?.name || "",
+        form?.phone || prof?.phone || "",
+        form?.address || prof?.address || "",
+        form?.slot || prof?.delivery_slot || "",
+        form?.note || "",
+        total,
+        paymentMethod,
+        "placed",
+        form?.geo?.lat ?? prof?.geo_lat ?? null,
+        form?.geo?.lon ?? prof?.geo_lon ?? null
+      ]
     );
     const orderId = ins.rows[0].id;
     for (const d of detailed) {
@@ -421,19 +529,44 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-// ===== Telegram paid webhook =====
+// ===== Telegram webhook (collect phone/location) =====
 app.post("/telegram/webhook", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
-    const update = req.body;
-    const sp = update?.message?.successful_payment;
-    if (sp) {
-      const uid = update?.message?.from?.id || null;
-      await pool.query(
-        "update orders set status='paid' where tg_user_id=$1 and status='placed' order by created_at desc limit 1",
-        [uid]
+    const up = req.body;
+    const msg = up?.message;
+    const chatId = msg?.chat?.id;
+    const uid = msg?.from?.id;
+
+    // /start sharephone -> show keyboard to request contact
+    const txt = (msg?.text || "").trim();
+    if (/^\/start(?:\s+sharephone)?$/i.test(txt)) {
+      await tgSend(chatId,
+        "Tap the button below to share your phone number.",
+        { keyboard: [[{ text: "Share my phone", request_contact: true }]], resize_keyboard: true, one_time_keyboard: true }
       );
     }
+
+    // Contact shared
+    if (msg?.contact && (msg.contact.user_id === uid || !msg.contact.user_id)) {
+      await pool.query(`
+        insert into profiles(tg_user_id, phone, updated_at)
+        values($1,$2,now())
+        on conflict (tg_user_id) do update set phone=$2, updated_at=now()
+      `, [uid, msg.contact.phone_number || null]);
+      await tgSend(chatId, "Thanks! Phone number saved ✅");
+    }
+
+    // Location shared
+    if (msg?.location) {
+      await pool.query(`
+        insert into profiles(tg_user_id, geo_lat, geo_lon, updated_at)
+        values($1,$2,$3,now())
+        on conflict (tg_user_id) do update set geo_lat=$2, geo_lon=$3, updated_at=now()
+      `, [uid, msg.location.latitude, msg.location.longitude]);
+      await tgSend(chatId, "Location saved ✅");
+    }
+
     res.sendStatus(200);
   } catch (e) {
     console.error(e);
