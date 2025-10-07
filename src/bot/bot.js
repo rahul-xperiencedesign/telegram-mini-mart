@@ -3,10 +3,11 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
 
-const BOT_TOKEN   = process.env.BOT_TOKEN;
-const WEBAPP_URL  = process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/';
-const CHANNEL_ID  = '@SouthAsiaMartChannel';   // ← set your public channel handle (or numeric id for private)
-const OWNER_ID    = (process.env.OWNER_ID || '').toString();
+const BOT_TOKEN  = process.env.BOT_TOKEN;
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/';
+// Prefer env if set (works for private numeric IDs like -100123..., or public handles like @SouthAsiaMartChannel)
+const CHANNEL_ID = (process.env.CHANNEL_ID || '@SouthAsiaMartChannel').toString();
+const OWNER_ID   = (process.env.OWNER_ID || '').toString();
 
 if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN missing in environment variables');
@@ -16,13 +17,12 @@ if (!BOT_TOKEN) {
 console.log('──────── BOT STARTUP ────────');
 console.log('WEBAPP_URL =', WEBAPP_URL);
 console.log('CHANNEL_ID =', CHANNEL_ID);
-console.log('OWNER_ID    =', OWNER_ID || '(not set)');
+console.log('OWNER_ID   =', OWNER_ID || '(not set)');
 console.log('─────────────────────────────');
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Utils
+/* Utils */
 async function deleteWebhookIfAny() {
   try {
     const info = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo`).then(r => r.json());
@@ -34,7 +34,7 @@ async function deleteWebhookIfAny() {
       console.log('No webhook set (good). Using long polling.');
     }
   } catch (e) {
-    console.warn('get/delete webhook failed (will ignore):', e?.message || e);
+    console.warn('get/delete webhook failed (ignored):', e?.message || e);
   }
 }
 
@@ -75,8 +75,7 @@ function isOwner(ctx) {
   return OWNER_ID && myId === OWNER_ID;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Diagnostics & admin helpers
+/* Diagnostics & admin helpers */
 bot.command('whoami', (ctx) => {
   const myId = ctx.from?.id?.toString();
   return ctx.reply(
@@ -96,8 +95,7 @@ bot.command('setmenu', async (ctx) => {
   return ctx.reply('✅ Menu button set to WebApp.');
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// User flows
+/* User flows */
 bot.start(async (ctx) => {
   await setChatMenuButton();
   await ctx.reply(
@@ -118,33 +116,44 @@ bot.hears('🆘 Support', (ctx) =>
   })
 );
 
-// Post “Shop Now” into your channel (pin it there)
+/* Post “Shop Now” in channel (pin it there) — with detailed error logging */
 bot.command('postshop', async (ctx) => {
-  if (!isOwner(ctx)) return ctx.reply('❌ Unauthorized: only the owner can post to the channel.');
+  try {
+    if (!isOwner(ctx)) return ctx.reply('❌ Unauthorized: only the owner can post to the channel.');
 
-  await bot.telegram.sendMessage(
-    CHANNEL_ID,
-    '🛒 *Welcome to South Asia Mart!* Tap below to start shopping 👇',
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[{ text: '🛍️ Shop Now', web_app: { url: WEBAPP_URL } }]]
+    const channel = CHANNEL_ID; // already prefers env if provided
+    console.log('Attempting to post to channel:', channel);
+
+    const resp = await bot.telegram.sendMessage(
+      channel,
+      '🛒 *Welcome to South Asia Mart!* Tap below to start shopping 👇',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '🛍️ Shop Now', web_app: { url: WEBAPP_URL } }]]
+        }
       }
-    }
-  );
+    );
 
-  return ctx.reply('✅ Posted "Shop Now" button to the channel!');
+    console.log('sendMessage result:', resp);
+    return ctx.reply('✅ Posted "Shop Now" button to the channel! Open the channel and pin it.');
+  } catch (err) {
+    // Telegraf surfaces API errors as err.response
+    const code = err?.response?.error_code;
+    const desc = err?.response?.description;
+    console.error('sendMessage error:', code, desc, err);
+    return ctx.reply(`❌ Failed to post. Telegram says: ${code || ''} ${desc || ''}\nCheck Render logs for details.`);
+  }
 });
 
-// Global error guard
+/* Global error guard */
 bot.catch((err, ctx) => {
   console.error('Bot error for', ctx.updateType, err);
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Launch
+/* Launch */
 (async function main() {
-  await deleteWebhookIfAny();       // ensures polling works if a webhook was set earlier
+  await deleteWebhookIfAny(); // make sure polling works
   await bot.launch();
   console.log('🤖 Bot running (long polling)…');
 })();
