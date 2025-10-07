@@ -5,7 +5,6 @@ import fetch from 'node-fetch';
 
 const BOT_TOKEN  = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/';
-// Prefer env if set (works for private numeric IDs like -100123..., or public handles like @SouthAsiaMartChannel)
 const CHANNEL_ID = (process.env.CHANNEL_ID || '@SouthAsiaMartChannel').toString();
 const OWNER_ID   = (process.env.OWNER_ID || '').toString();
 
@@ -13,6 +12,8 @@ if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN missing in environment variables');
   process.exit(1);
 }
+
+let BOT_USERNAME = ''; // we’ll fill this from getMe()
 
 console.log('──────── BOT STARTUP ────────');
 console.log('WEBAPP_URL =', WEBAPP_URL);
@@ -47,7 +48,7 @@ async function setChatMenuButton() {
         menu_button: {
           type: 'web_app',
           text: '🛒 Shop Now',
-          web_app: { url: WEBAPP_URL }
+          web_app: { url: WEBAPP_URL } // valid only in private chats; ok here because it's a menu button
         }
       })
     });
@@ -62,7 +63,7 @@ async function setChatMenuButton() {
 function shopKeyboard() {
   return {
     keyboard: [
-      [{ text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }],
+      [{ text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }], // private chat only
       [{ text: '📦 My Orders' }, { text: '🆘 Support' }]
     ],
     resize_keyboard: true,
@@ -75,7 +76,7 @@ function isOwner(ctx) {
   return OWNER_ID && myId === OWNER_ID;
 }
 
-/* Diagnostics & admin helpers */
+/* Diagnostics */
 bot.command('whoami', (ctx) => {
   const myId = ctx.from?.id?.toString();
   return ctx.reply(
@@ -95,7 +96,7 @@ bot.command('setmenu', async (ctx) => {
   return ctx.reply('✅ Menu button set to WebApp.');
 });
 
-/* User flows */
+/* User flows (private chat) */
 bot.start(async (ctx) => {
   await setChatMenuButton();
   await ctx.reply(
@@ -105,32 +106,28 @@ bot.start(async (ctx) => {
 });
 
 bot.hears('📦 My Orders', (ctx) =>
-  ctx.reply('You don’t have any orders yet. Tap 🛒 Shop Now to begin!', {
-    reply_markup: shopKeyboard()
-  })
+  ctx.reply('You don’t have any orders yet. Tap 🛒 Shop Now to begin!', { reply_markup: shopKeyboard() })
 );
 
 bot.hears('🆘 Support', (ctx) =>
-  ctx.reply('Need help? Contact @YourSupportHandle.', {
-    reply_markup: shopKeyboard()
-  })
+  ctx.reply('Need help? Contact @YourSupportHandle.', { reply_markup: shopKeyboard() })
 );
 
-/* Post “Shop Now” in channel (pin it there) — with detailed error logging */
+/* Channel post: use URL button with startapp deep-link (NOT web_app) */
 bot.command('postshop', async (ctx) => {
   try {
     if (!isOwner(ctx)) return ctx.reply('❌ Unauthorized: only the owner can post to the channel.');
 
-    const channel = CHANNEL_ID; // already prefers env if provided
-    console.log('Attempting to post to channel:', channel);
+    // Deep link to open the WebApp from a channel message
+    const startAppUrl = `https://t.me/${BOT_USERNAME}?startapp=shop`;
 
     const resp = await bot.telegram.sendMessage(
-      channel,
+      CHANNEL_ID,
       '🛒 *Welcome to South Asia Mart!* Tap below to start shopping 👇',
       {
         parse_mode: 'Markdown',
         reply_markup: {
-          inline_keyboard: [[{ text: '🛍️ Shop Now', web_app: { url: WEBAPP_URL } }]]
+          inline_keyboard: [[{ text: '🛍️ Shop Now', url: startAppUrl }]] // URL instead of web_app
         }
       }
     );
@@ -138,7 +135,6 @@ bot.command('postshop', async (ctx) => {
     console.log('sendMessage result:', resp);
     return ctx.reply('✅ Posted "Shop Now" button to the channel! Open the channel and pin it.');
   } catch (err) {
-    // Telegraf surfaces API errors as err.response
     const code = err?.response?.error_code;
     const desc = err?.response?.description;
     console.error('sendMessage error:', code, desc, err);
@@ -153,7 +149,16 @@ bot.catch((err, ctx) => {
 
 /* Launch */
 (async function main() {
-  await deleteWebhookIfAny(); // make sure polling works
+  await deleteWebhookIfAny();
+  // fetch bot username to build t.me/<username>?startapp=... links
+  try {
+    const me = await bot.telegram.getMe();
+    BOT_USERNAME = me.username;
+    console.log('Bot username =', BOT_USERNAME);
+  } catch (e) {
+    console.warn('getMe failed:', e?.message || e);
+  }
+
   await bot.launch();
   console.log('🤖 Bot running (long polling)…');
 })();
