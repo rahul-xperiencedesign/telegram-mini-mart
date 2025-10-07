@@ -527,9 +527,10 @@ app.post("/order", async (req, res) => {
       `Total: ₹${(total/100).toFixed(2)} · Method: ${paymentMethod}\n` +
       `Address: ${form?.address || prof?.address || ""}\nSlot: ${form?.slot || prof?.delivery_slot || ""}\nNote: ${form?.note || ""}`;
     notify(caption);
-    if (form?.photoBase64) {
-      await sendPhotoToAdmin(form.photoBase64, `📷 Photo for order #${orderId}`);
-    }
+  if (form?.photoBase64) {
+  // do not block order flow if photo upload fails
+  sendPhotoToAdmin(form.photoBase64, `📷 Photo for order #${orderId}`).catch(()=>{});
+}
 
     if (paymentMethod === "COD") {
       return res.json({ ok: true, orderId, total, method: "COD" });
