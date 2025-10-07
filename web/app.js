@@ -1,287 +1,305 @@
-const API = window.API_URL;
+// ===== Telegram WebApp glue =====
 const tg = window.Telegram?.WebApp;
+tg?.ready?.();
 
-// state
-let products = [];
-let categories = [];
-let cart = [];              // { id, title, price, qty, ageRestricted }
-let photoBase64 = "";       // optional upload
-let payments = { onlineAllowed:false, upiAllowed:true, codAllowed:true };
-let cartTotal = 0;
+// ===== State =====
+const state = {
+  products: [],
+  categories: [],
+  cart: new Map(),                 // id -> { id, title, price, qty, ageRestricted, image }
+  ageAck: false,                   // age gate confirmed once
+  profile: null,                   // prefill cache
+  payments: { onlineAllowed:false, upiAllowed:false, codAllowed:true },
+  photoBase64: null,               // optional location photo
+};
 
-const el = (id) => document.getElementById(id);
+// ===== DOM =====
+const el = {
+  grid: document.getElementById("grid"),
+  filters: document.getElementById("filters"),
+  badge: document.getElementById("cartBadge"),
+  drawer: document.getElementById("drawer"),
+  openDrawer: document.getElementById("openDrawer"),
+  closeDrawer: document.getElementById("closeDrawer"),
+  cartList: document.getElementById("cartList"),
+  totalBox: document.getElementById("totalBox"),
+  payBadges: document.getElementById("payBadges"),
+  payCOD: document.getElementById("payCOD"),
+  payUPI: document.getElementById("payUPI"),
+  payOnline: document.getElementById("payOnline"),
+  name: document.getElementById("name"),
+  phone: document.getElementById("phone"),
+  address: document.getElementById("address"),
+  slot: document.getElementById("slot"),
+  note: document.getElementById("note"),
+  ageGate: document.getElementById("ageGate"),
+  ageOk: document.getElementById("ageOk"),
+  photoInput: document.getElementById("photoInput"),
+  photoPreview: document.getElementById("photoPreview"),
+};
 
-// UI refs
-const grid = el("grid");
-const filters = el("filters");
-const cartBadge = el("cartBadge");
-const drawer = el("drawer");
-const overlay = el("drawerOverlay");
-const openDrawerBtn = el("openDrawer");
-const closeDrawerBtn = el("closeDrawer");
-const backToShopBtn = el("backToShop");
+const fmt = n => `₹${(n/100).toFixed(2)}`;
+const placeholder =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><rect width='96' height='96' fill='#0d1a24'/><g fill='#29465f'><circle cx='48' cy='38' r='18'/><rect x='18' y='64' width='60' height='12' rx='6'/></g></svg>`);
 
-const cartList = el("cartList");
-const nameInp = el("name");
-const phoneInp = el("phone");
-const addrInp = el("address");
-const slotSel = el("slot");
-const noteInp = el("note");
-
-const photoInput = el("photo");
-const photoPreview = el("photoPreview");
-
-const payOptions = el("payOptions");
-const totalRow = el("totalRow");
-const btnCOD = el("placeCOD");
-const btnUPI = el("payUPI");
-const btnOnline = el("payOnline");
-
-const ageGate = el("ageGate");
-const ageOk = el("ageOk");
-
-// ---------- helpers ----------
-function rupees(paise){ return "₹" + (paise/100).toFixed(2); }
-function updateBadge(){
-  const count = cart.reduce((s,i)=>s+i.qty,0);
-  cartBadge.textContent = count;
+// ===== API helpers =====
+async function api(path, body) {
+  const r = await fetch(`${window.API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(body || {})
+  });
+  return r.json();
 }
-
-// ---------- data ----------
-async function fetchJSON(url, opts){
-  const r = await fetch(url, opts);
+async function getJSON(path) {
+  const r = await fetch(`${window.API_URL}${path}`);
   return r.json();
 }
 
-async function load(){
-  // categories
-  const catResp = await fetchJSON(`${API}/categories`);
-  if (catResp.ok) categories = catResp.categories || [];
-
-  // products
-  const proResp = await fetchJSON(`${API}/products`);
-  if (proResp.ok) products = proResp.items || [];
-
+// ===== Load catalog =====
+async function loadCatalog() {
+  const cats = await getJSON("/categories");
+  state.categories = cats.categories || [];
   renderFilters();
-  renderGrid(products);
-  prefillFromTelegram();
+
+  const prod = await getJSON("/products");
+  state.products = prod.items || [];
+  renderGrid(state.products);
 }
 
-function prefillFromTelegram(){
-  try{
-    const initStr = tg?.initData || "";
-    if (!initStr) return;
-    const usp = new URLSearchParams(initStr);
-    const userRaw = usp.get("user") || "{}";
-    const user = JSON.parse(decodeURIComponent(userRaw));
-    const parts = [user?.first_name, user?.last_name].filter(Boolean).join(" ");
-    if (parts && !nameInp.value) nameInp.value = parts;
-  }catch{}
-}
-
-function renderFilters(){
-  filters.innerHTML = "";
-  const make = (label, value) => {
+// ===== Filters =====
+function renderFilters() {
+  el.filters.innerHTML = "";
+  const any = btn("All", () => renderGrid(state.products), true);
+  el.filters.appendChild(any);
+  for (const c of state.categories) {
+    el.filters.appendChild(btn(c, () => {
+      const list = state.products.filter(p => p.category === c);
+      renderGrid(list);
+    }));
+  }
+  function btn(label, on, active=false){
     const b = document.createElement("button");
+    b.className = "badge" + (active? " ok" : "");
     b.textContent = label;
-    b.onclick = () => {
-      [...filters.children].forEach(x=>x.classList.remove("active"));
-      b.classList.add("active");
-      renderGrid(value ? products.filter(p=>p.category===value) : products);
-    };
+    b.onclick = () => { [...el.filters.children].forEach(x=>x.classList.remove("ok")); b.classList.add("ok"); on(); };
     return b;
-  };
-  filters.appendChild(make("All", ""));
-  categories.forEach(c => filters.appendChild(make(c, c)));
+  }
 }
 
-function renderGrid(list){
-  grid.innerHTML = list.map(p => `
-    <article class="card product">
-      <h4>${p.title}</h4>
-      <div class="muted">${p.category}</div>
-      <div class="price">${rupees(p.price)}</div>
-      <div class="cta">
-        <button class="btn" data-add="${p.id}">Add</button>
-      </div>
-    </article>
-  `).join("");
+// ===== Grid =====
+function renderGrid(items) {
+  el.grid.innerHTML = "";
+  for (const p of items) {
+    const card = document.createElement("div");
+    card.className = "pcard";
 
-  grid.querySelectorAll("[data-add]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      addToCart(btn.dataset.add);
-    });
-  });
-}
+    const img = document.createElement("img");
+    img.className = "pimg";
+    img.src = p.image || placeholder;
+    img.onerror = () => { img.src = placeholder; };
 
-function addToCart(id){
-  const p = products.find(x=>x.id===id);
-  if (!p) return;
-  const found = cart.find(x=>x.id===id);
-  if (found) found.qty += 1;
-  else cart.push({ id:p.id, title:p.title, price:p.price, qty:1, ageRestricted: !!p.age_restricted });
+    const title = document.createElement("div");
+    title.className = "ptitle";
+    title.textContent = p.title;
+
+    const meta = document.createElement("div");
+    meta.className = "pmeta";
+    meta.innerHTML = `<span>${fmt(p.price)}</span><span>${p.category}</span>`;
+
+    const qty = document.createElement("div");
+    qty.className = "qty";
+
+    const minus = document.createElement("button");
+    minus.className = "qbtn";
+    minus.textContent = "−";
+    minus.onclick = () => updateQty(p, -1);
+
+    const count = document.createElement("div");
+    count.textContent = getQty(p.id);
+
+    const plus = document.createElement("button");
+    plus.className = "qbtn";
+    plus.textContent = "+";
+    plus.onclick = () => updateQty(p, +1);
+
+    qty.append(minus, count, plus);
+
+    const add = document.createElement("button");
+    add.className = "addbtn";
+    add.textContent = "Add to cart";
+    add.onclick = () => updateQty(p, +1);
+
+    card.append(img, title, meta, qty, add);
+    el.grid.appendChild(card);
+  }
   updateBadge();
 }
 
-function changeQty(id, delta){
-  const it = cart.find(x=>x.id===id);
-  if (!it) return;
-  it.qty += delta;
-  if (it.qty <= 0) cart = cart.filter(x=>x.id!==id);
-  updateBadge();
-  renderCart();
+function getQty(id) { return state.cart.get(id)?.qty || 0; }
+function updateQty(p, delta) {
+  const cur = state.cart.get(p.id) || { id:p.id, title:p.title, price:p.price, qty:0, ageRestricted:!!p.age_restricted, image:p.image || "" };
+  cur.qty = Math.max(0, cur.qty + delta);
+  if (cur.qty === 0) state.cart.delete(p.id);
+  else state.cart.set(p.id, cur);
+  renderGrid(state.products);      // refresh counts in grid
+  if (el.drawer.classList.contains("show")) renderCart(); // keep drawer fresh if open
 }
 
-// ---------- drawer ----------
-function openCart(){
-  renderCart(); // also recalculates server-side totals
-  overlay.classList.remove("hidden");
-  drawer.classList.remove("hidden");
-  drawer.setAttribute("aria-hidden","false");
-}
-function closeCart(){
-  overlay.classList.add("hidden");
-  drawer.classList.add("hidden");
-  drawer.setAttribute("aria-hidden","true");
-}
-
-openDrawerBtn?.addEventListener("click", openCart);
-overlay?.addEventListener("click", closeCart);
-closeDrawerBtn?.addEventListener("click", closeCart);
-backToShopBtn?.addEventListener("click", closeCart);
-document.addEventListener("keydown", (e)=>{ if(e.key==="Escape") closeCart(); });
-
-// photo upload → base64 preview
-photoInput?.addEventListener("change", async (e)=>{
-  const f = e.target.files?.[0];
-  if (!f) { photoBase64=""; photoPreview.classList.add("hidden"); photoPreview.innerHTML=""; return; }
-  if (f.size > 1.5*1024*1024) { alert("Photo is large (~>1.5MB). Please choose a smaller image."); return; }
-  const b64 = await fileToBase64(f);
-  photoBase64 = b64;
-  photoPreview.innerHTML = `<img src="${b64}" alt="location photo"/>`;
-  photoPreview.classList.remove("hidden");
-});
-function fileToBase64(file){
-  return new Promise(res=>{
-    const r = new FileReader();
-    r.onload = ()=>res(r.result);
-    r.readAsDataURL(file);
-  });
-}
-
-async function renderCart(){
-  cartList.innerHTML = cart.length ? cart.map(it=>`
-    <div class="line">
-      <div>
-        <div><b>${it.title}</b></div>
-        <div class="muted">${rupees(it.price)} ${it.ageRestricted ? "· <span class='warn'>RESTRICTED</span>" : ""}</div>
-      </div>
-      <div class="qty">
-        <button class="iconbtn" data-dec="${it.id}">–</button>
-        <div>${it.qty}</div>
-        <button class="iconbtn" data-inc="${it.id}">+</button>
-      </div>
-    </div>
-  `).join("") : `<div class="muted">Your cart is empty.</div>`;
-
-  cartList.querySelectorAll("[data-inc]").forEach(b=>b.addEventListener("click",()=>{changeQty(b.dataset.inc, +1)}));
-  cartList.querySelectorAll("[data-dec]").forEach(b=>b.addEventListener("click",()=>{changeQty(b.dataset.dec, -1)}));
-
-  // Ask server for price + allowed payment methods
-  const body = { items: cart.map(i=>({ id:i.id, qty:i.qty })) };
-  const priceResp = await fetchJSON(`${API}/cart/price`, {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify(body)
-  });
-
-  payments = priceResp.ok ? priceResp.payments : { onlineAllowed:false, upiAllowed:true, codAllowed:true };
-  cartTotal = priceResp.ok ? (priceResp.total || 0) : 0;
-  totalRow.textContent = `Total: ${rupees(cartTotal)}`;
-
-  // Render button visibility
-  btnCOD.classList.toggle("hidden", !payments.codAllowed);
-  btnUPI.classList.toggle("hidden", !payments.upiAllowed);
-  btnOnline.classList.toggle("hidden", !payments.onlineAllowed);
-
-  // Show chips
-  payOptions.innerHTML = `
-    <span class="chip">${payments.codAllowed ? "✅ COD available" : "❌ COD disabled"}</span>
-    <span class="chip">${payments.upiAllowed ? "✅ UPI allowed" : "❌ UPI blocked"}</span>
-    <span class="chip">${payments.onlineAllowed ? "✅ Online pay" : "❌ Online pay disabled"}</span>
-  `;
-
-  // age-restricted banner → show age gate once per open
-  if (cart.some(i=>i.ageRestricted)) {
-    ageGate.classList.remove("hidden");
+// ===== Drawer / cart =====
+function renderCart() {
+  el.cartList.innerHTML = "";
+  const items = [...state.cart.values()];
+  if (!items.length) {
+    el.cartList.innerHTML = `<div class="card">Your cart is empty.</div>`;
   } else {
-    ageGate.classList.add("hidden");
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "crow";
+      const title = document.createElement("div");
+      title.textContent = `${it.title} — ${fmt(it.price)}`;
+
+      const qty = document.createElement("div");
+      qty.className = "cqty";
+      const minus = document.createElement("button");
+      minus.className = "qbtn"; minus.textContent = "−";
+      minus.onclick = () => { updateQty({id:it.id, title:it.title, price:it.price, age_restricted:it.ageRestricted, image:it.image}, -1); renderCart(); };
+      const count = document.createElement("div"); count.textContent = it.qty;
+      const plus = document.createElement("button");
+      plus.className = "qbtn"; plus.textContent = "+";
+      plus.onclick = () => { updateQty({id:it.id, title:it.title, price:it.price, age_restricted:it.ageRestricted, image:it.image}, +1); renderCart(); };
+      qty.append(minus, count, plus);
+
+      const price = document.createElement("div");
+      price.textContent = fmt(it.price * it.qty);
+
+      row.append(title, qty, price);
+      el.cartList.appendChild(row);
+    }
+  }
+  refreshTotalsAndPayments();
+  updateBadge();
+}
+
+function updateBadge() {
+  const n = [...state.cart.values()].reduce((s,i)=>s+i.qty,0);
+  el.badge.textContent = n;
+  el.openDrawer.style.display = n>0 ? "block" : "none";
+}
+
+async function refreshTotalsAndPayments() {
+  const items = [...state.cart.values()].map(x => ({ id:x.id, qty:x.qty }));
+  const resp = await api("/cart/price", { items });
+  // show badges
+  const b = [];
+  if (resp.payments?.codAllowed) b.push(`<span class="badge ok">✅ COD available</span>`);
+  if (resp.payments?.upiAllowed) b.push(`<span class="badge ok">✅ UPI available</span>`);
+  else b.push(`<span class="badge no">❌ UPI blocked</span>`);
+  if (resp.payments?.onlineAllowed) b.push(`<span class="badge online">💳 Online pay enabled</span>`);
+  else b.push(`<span class="badge no">❌ Online pay disabled</span>`);
+  el.payBadges.innerHTML = b.join(" ");
+
+  state.payments = resp.payments || { codAllowed:true };
+  el.totalBox.textContent = `Total: ${fmt(resp.total||0)}`;
+
+  // buttons
+  el.payCOD.classList.toggle("hidden", !(resp.payments?.codAllowed));
+  el.payUPI.classList.toggle("hidden", !(resp.payments?.upiAllowed));
+  el.payOnline.classList.toggle("hidden", !(resp.payments?.onlineAllowed));
+
+  // Age modal only once if any restricted in cart and not yet acknowledged
+  const anyRestricted = (resp.items||[]).some(i => i.ageRestricted);
+  if (anyRestricted && !state.ageAck) {
+    el.ageGate.classList.remove("hidden");
   }
 }
-ageOk?.addEventListener("click", ()=> ageGate.classList.add("hidden"));
 
-// ---------- order flows ----------
-function getForm(){
-  return {
-    name: nameInp.value.trim(),
-    phone: phoneInp.value.trim(),
-    address: addrInp.value.trim(),
-    slot: slotSel.value.trim(),
-    note: noteInp.value.trim(),
-    photoBase64 // optional
+// ===== Photo upload -> base64 (small preview) =====
+el.photoInput.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) { state.photoBase64 = null; return; }
+  const img = await readFileAsDataURL(file);
+  state.photoBase64 = img;
+
+  // preview small thumbnail
+  const c = el.photoPreview;
+  const image = new Image();
+  image.onload = () => {
+    const max = 240;
+    const scale = Math.min(max/image.width, max/image.height);
+    c.width = Math.round(image.width*scale);
+    c.height = Math.round(image.height*scale);
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0,0,c.width,c.height);
+    ctx.drawImage(image,0,0,c.width,c.height);
   };
-}
-function getItems(){
-  return cart.map(i=>({ id:i.id, qty:i.qty }));
-}
-function initHeaders(){
-  const initData = tg?.initData || "";
-  const h = { "Content-Type": "application/json" };
-  if (initData) h["x-telegram-initdata"] = initData; // server will also accept in body
-  return h;
-}
-
-async function placeOrder(paymentMethod){
-  if (!cart.length) return alert("Cart is empty.");
-  const form = getForm();
-  if (!form.name || !form.phone || !form.address || !form.slot)
-    return alert("Please fill name, phone, address and slot.");
-
-  const resp = await fetchJSON(`${API}/order`, {
-    method:"POST",
-    headers: initHeaders(),
-    body: JSON.stringify({
-      initData: tg?.initData || "",
-      items: getItems(),
-      paymentMethod,
-      form
-    })
+  image.src = img;
+});
+function readFileAsDataURL(file){
+  return new Promise((res,rej)=>{
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
   });
+}
 
-  if (!resp.ok) return alert(resp.error || "Order failed");
-
-  if (paymentMethod === "COD") {
-    alert(`Order #${resp.orderId} placed. Pay cash on delivery.`);
-    cart = []; updateBadge(); closeCart();
-  } else if (paymentMethod === "UPI") {
-    if (resp.upi?.link) {
-      window.location.href = resp.upi.link; // opens UPI app
-    } else {
-      alert("Could not get UPI link.");
+// ===== Checkout =====
+async function placeOrder(method) {
+  const initData = tg?.initData || "";
+  const items = [...state.cart.values()].map(x => ({ id:x.id, qty:x.qty }));
+  const form = {
+    name: el.name.value.trim() || "",
+    phone: el.phone.value.trim() || "",
+    address: el.address.value.trim() || "",
+    slot: el.slot.value,
+    note: el.note.value.trim() || "",
+    photoBase64: state.photoBase64 || null
+  };
+  try {
+    const r = await api("/order", { initData, items, paymentMethod: method, form });
+    if (!r.ok) throw new Error(r.error || "SERVER_ERROR");
+    if (method === "COD") {
+      alert(`Order placed! #${r.orderId}\nTotal ${fmt(r.total)}`);
+      state.cart.clear();
+      renderCart();
+      el.drawer.classList.remove("show");
+    } else if (method === "UPI") {
+      // open UPI link
+      window.location.href = r.upi.link;
+    } else if (method === "ONLINE") {
+      window.location.href = r.link;
     }
-  } else if (paymentMethod === "ONLINE") {
-    if (resp.link) {
-      window.location.href = resp.link; // opens Telegram invoice page
-    } else {
-      alert("Could not create invoice link.");
-    }
+  } catch (e) {
+    alert(e.message || "SERVER_ERROR");
   }
 }
 
-btnCOD?.addEventListener("click", ()=>placeOrder("COD"));
-btnUPI?.addEventListener("click", ()=>placeOrder("UPI"));
-btnOnline?.addEventListener("click", ()=>placeOrder("ONLINE"));
+// ===== Prefill (optional) =====
+async function prefill() {
+  try {
+    const r = await api("/me", { initData: tg?.initData || "" });
+    if (r.ok && r.profile) {
+      state.profile = r.profile;
+      el.name.value = r.profile.name || "";
+      el.phone.value = r.profile.phone || "";
+      el.address.value = r.profile.address || "";
+      el.slot.value = r.profile.delivery_slot || "";
+    }
+  } catch {}
+}
 
-// ---------- init ----------
-load().catch(()=>{});
-updateBadge();
+// ===== Events =====
+el.openDrawer.addEventListener("click", () => {
+  renderCart();
+  el.drawer.classList.add("show");
+});
+el.closeDrawer.addEventListener("click", () => el.drawer.classList.remove("show"));
+el.payCOD.addEventListener("click", () => placeOrder("COD"));
+el.payUPI.addEventListener("click", () => placeOrder("UPI"));
+el.payOnline.addEventListener("click", () => placeOrder("ONLINE"));
+el.ageOk.addEventListener("click", () => { state.ageAck = true; el.ageGate.classList.add("hidden"); });
+
+loadCatalog();
+prefill();
