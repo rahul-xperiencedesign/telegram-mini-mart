@@ -6,9 +6,7 @@
   <title>South Asia Mart</title>
   <link rel="stylesheet" href="./styles.css"/>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script>
-    window.API_URL = "https://telegram-mini-mart.onrender.com";
-  </script>
+  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
 </head>
 <body>
   <header class="topbar">
@@ -17,17 +15,18 @@
   </header>
 
   <main class="wrap">
+    <!-- Category tabs -->
     <div id="filters" class="filters"></div>
 
     <!-- Product grid -->
     <section id="grid" class="grid"></section>
   </main>
 
-  <!-- Age Gate (single confirmation per session) -->
+  <!-- Age Gate (single time) -->
   <div id="ageGate" class="modal hidden">
     <div class="modal-card">
       <h3>Age Verification</h3>
-      <p>This order contains age-restricted products. Please confirm you are 21+ and continue with <b>Cash on Delivery</b>.</p>
+      <p>This order contains age-restricted items. Confirm you’re 21+ and continue with Cash on Delivery.</p>
       <button id="ageOk" class="btn cod">I’m 21+ (Continue)</button>
     </div>
   </div>
@@ -35,25 +34,20 @@
   <!-- Cart Drawer -->
   <aside id="drawer" class="drawer">
     <div class="drawer-head">
+      <button id="backShopping" class="backbtn">← Continue shopping</button>
       <h2>Your Order</h2>
       <button id="closeDrawer" class="iconbtn">✕</button>
     </div>
 
     <div id="cartList" class="cartlist"></div>
 
-    <!-- Optional photo & slot -->
+    <!-- Delivery details (optional) -->
     <section class="card">
       <h3>Delivery Details (optional)</h3>
 
-      <div class="row">
-        <input id="name" placeholder="Full Name (optional)"/>
-      </div>
-      <div class="row">
-        <input id="phone" placeholder="Phone (optional)"/>
-      </div>
-      <div class="row">
-        <textarea id="address" placeholder="Address (optional)"></textarea>
-      </div>
+      <div class="row"><input id="name" placeholder="Full Name (optional)"/></div>
+      <div class="row"><input id="phone" placeholder="Phone (optional)"/></div>
+      <div class="row"><textarea id="address" placeholder="Address (optional)"></textarea></div>
 
       <div class="row">
         <select id="slot">
@@ -66,7 +60,7 @@
 
       <div class="row">
         <label class="uplabel">Location photo (optional)</label>
-        <input id="photoInput" type="file" accept="image/*" />
+        <input id="photoInput" type="file" accept="image/*"/>
         <canvas id="photoPreview" class="ph" width="0" height="0" aria-hidden="true"></canvas>
       </div>
 
@@ -82,13 +76,15 @@
 
     <div class="drawer-foot">
       <div id="totalBox" class="total">Total: ₹0.00</div>
-      <button id="payCOD" class="btn primary">Place COD Order</button>
-      <button id="payUPI" class="btn upi hidden">Pay via UPI</button>
-      <button id="payOnline" class="btn online hidden">Pay Online</button>
+      <div class="payrow">
+        <button id="payCOD" class="btn primary">Place COD Order</button>
+        <button id="payUPI" class="btn upi hidden">Pay via UPI</button>
+        <button id="payOnline" class="btn online hidden">Pay Online</button>
+      </div>
     </div>
   </aside>
 
-  <!-- View cart FAB -->
+  <!-- Floating View Cart (outside the drawer only) -->
   <button id="openDrawer" class="fab">View Cart</button>
 
   <script src="./app.js"></script>
