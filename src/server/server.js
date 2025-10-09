@@ -6,8 +6,8 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 const app = express();
-// allow small base64 photo payloads (~<= 1.5MB). Adjust if needed.
-app.use(express.json({ limit: "4mb" }));
+// allow up to ~5MB so photo data-URL can pass (front-end resizes, but be safe)
+app.use(express.json({ limit: "5mb" }));
 app.use(
   cors({
     origin: [/\.vercel\.app$/, /localhost:\d+$/],
@@ -62,77 +62,64 @@ function verifyInitData(initData, botToken) {
   const ok = hash && crypto.timingSafeEqual(Buffer.from(calcHash), Buffer.from(hash));
   return { ok, user: params.get("user") };
 }
-const rupees = (p) => (p / 100).toFixed(2); // NOTE: returns number string, no currency symbol
-
+const rupees = (p) => (p / 100).toFixed(2);
 function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) {
   const params = new URLSearchParams({ pa, pn, am, cu, tn });
   return `upi://pay?${params.toString()}`;
 }
 
-async function tgSend(chatId, text, replyMarkup = null) {
-  if (!process.env.BOT_TOKEN) return;
-  const body = { chat_id: chatId, text };
+// Small telegram wrappers
+async function tgSendMessage(chatId, text, replyMarkup = null) {
+  if (!process.env.BOT_TOKEN || !chatId) return;
+  const body = { chat_id: chatId, text, parse_mode: "HTML" };
   if (replyMarkup) body.reply_markup = replyMarkup;
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
   }).catch(()=>{});
 }
-
-// ===== NEW: admin notifications (text) =====
-async function notify(text) {
-  try {
-    const token = process.env.BOT_TOKEN;
-    const chatId = process.env.NOTIFY_CHAT_ID || process.env.OWNER_ID || "";
-    if (!token || !chatId || !text) return;
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    });
-  } catch (e) {
-    console.warn("notify() failed:", e?.message || e);
-  }
+function parseDataUrlToBuffer(dataUrl) {
+  // data:[<mediatype>][;base64],<data>
+  if (!dataUrl || typeof dataUrl !== "string") return null;
+  const m = dataUrl.match(/^data:(.+?);base64,(.*)$/);
+  if (!m) return null;
+  const mime = m[1];
+  const buf = Buffer.from(m[2], "base64");
+  return { mime, buf };
 }
-
-// ===== NEW: photo forwarding helper (data URL -> actual Telegram photo upload) =====
-async function sendPhotoToAdmin(base64DataUrl, caption = "") {
+async function sendPhotoToAdmin(base64Data, caption = "") {
+  // Non-fatal helper; swallow errors.
   try {
-    const token = process.env.BOT_TOKEN;
-    const chatId = process.env.NOTIFY_CHAT_ID || process.env.OWNER_ID || "";
-    if (!token || !chatId || !base64DataUrl) return;
+    const adminChat = process.env.ADMIN_CHAT_ID || process.env.OWNER_ID;
+    if (!adminChat || !process.env.BOT_TOKEN || !base64Data) return;
 
-    // data URL parsing
-    const m = /^data:(.+);base64,(.*)$/.exec(base64DataUrl);
-    if (!m) {
-      return notify(`(Photo missing/invalid)\n${caption}`);
-    }
-    const mime = m[1];
-    const b64 = m[2];
+    const parsed = parseDataUrlToBuffer(base64Data);
+    if (!parsed) return;
 
-    // Convert to Blob via Buffer (Node 18+ has Blob/FormData globally)
-    const buf = Buffer.from(b64, "base64");
-    const file = new Blob([buf], { type: mime });
+    // send as multipart/form-data
+    const url = `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`;
     const form = new FormData();
-    form.append("chat_id", chatId);
-    if (caption) form.append("caption", caption);
-    form.append("photo", file, "location.jpg");
+    form.set("chat_id", adminChat);
+    form.set("caption", caption);
+    form.set("photo", new Blob([parsed.buf], { type: parsed.mime }), "location.jpg");
 
-    const resp = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-      method: "POST",
-      body: form,
-    });
-    const json = await resp.json();
-    if (!json.ok) {
-      console.warn("sendPhoto API error:", json);
-      // fallback to text notification if upload fails
-      await notify(`${caption}\n(photo upload failed)`);
-    }
-  } catch (e) {
-    console.warn("sendPhotoToAdmin failed:", e?.message || e);
-    await notify(`${caption}\n(photo upload failed)`);
-  }
+    await fetch(url, { method: "POST", body: form }).catch(()=>{});
+  } catch { /* ignore */ }
+}
+async function notifyAdminOrder(order) {
+  try {
+    const adminChat = process.env.ADMIN_CHAT_ID || process.env.OWNER_ID;
+    if (!adminChat || !process.env.BOT_TOKEN) return;
+    const text =
+      `<b>🧾 New Order #${order.id}</b>\n` +
+      `👤 <b>${order.name || "Customer"}</b>\n` +
+      `📞 ${order.phone || "—"}\n` +
+      `🏠 ${order.address || "—"}\n` +
+      `🗓️ ${order.slot || "—"}\n` +
+      `💬 ${order.note || "—"}\n` +
+      `💰 <b>₹${rupees(order.total)}</b>\n` +
+      `💳 ${order.payment_method}`;
+    await tgSendMessage(adminChat, text);
+  } catch { /* ignore */ }
 }
 
 // ===== Schema & seed =====
@@ -172,7 +159,6 @@ create table if not exists order_items (
   qty integer not null
 );
 
--- Profile store keyed by Telegram user id
 create table if not exists profiles (
   tg_user_id bigint primary key,
   name text,
@@ -380,7 +366,6 @@ app.get("/products", async (req, res) => {
 });
 
 // ===== Profiles API for WebApp (auto prefill) =====
-// POST /me  { initData }  -> returns { name, username, phone, address, geo, delivery_slot }
 app.post("/me", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
@@ -416,7 +401,6 @@ app.post("/me", async (req, res) => {
   }
 });
 
-// POST /me/update  { initData, phone, address, delivery_slot, geo:{lat,lon} }
 app.post("/me/update", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
@@ -477,7 +461,7 @@ app.post("/cart/price", async (req, res) => {
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
-    const { initData, items = [], paymentMethod, form } = req.body || {}; // form may include {name,phone,address,slot,note,photoBase64}
+    const { initData, items = [], paymentMethod, form } = req.body || {};
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
     if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
@@ -495,7 +479,6 @@ app.post("/order", async (req, res) => {
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
-    // profile fallback
     const tgUser = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
     const prof = (await pool.query("select * from profiles where tg_user_id=$1", [tgUser?.id || null])).rows[0];
 
@@ -504,11 +487,11 @@ app.post("/order", async (req, res) => {
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
       [
         tgUser?.id || null,
-        form?.name || prof?.name || "",
-        form?.phone || prof?.phone || "",
-        form?.address || prof?.address || "",
-        form?.slot || prof?.delivery_slot || "",
-        form?.note || "",
+        (form?.name || prof?.name || "")?.slice(0,160),
+        (form?.phone || prof?.phone || "")?.slice(0,40),
+        (form?.address || prof?.address || "")?.slice(0,1000),
+        (form?.slot || prof?.delivery_slot || "")?.slice(0,80),
+        (form?.note || "")?.slice(0,1000),
         total,
         paymentMethod,
         "placed",
@@ -517,31 +500,39 @@ app.post("/order", async (req, res) => {
       ]
     );
     const orderId = ins.rows[0].id;
+
     for (const d of detailed) {
-      await pool.query("insert into order_items(order_id,product_id,title,price,qty) values($1,$2,$3,$4,$5)", [orderId, d.id, d.title, d.price, d.qty]);
+      await pool.query(
+        "insert into order_items(order_id,product_id,title,price,qty) values($1,$2,$3,$4,$5)",
+        [orderId, d.id, d.title, d.price, d.qty]
+      );
     }
 
-    // Notify owner/admin + optional photo forwarding
-    const caption =
-      `🆕 Order #${orderId} — ${form?.name || prof?.name || ""} · ${form?.phone || prof?.phone || ""}\n` +
-      `Total: ₹${(total/100).toFixed(2)} · Method: ${paymentMethod}\n` +
-      `Address: ${form?.address || prof?.address || ""}\nSlot: ${form?.slot || prof?.delivery_slot || ""}\nNote: ${form?.note || ""}`;
-    notify(caption);
-  if (form?.photoBase64) {
-  // do not block order flow if photo upload fails
-  sendPhotoToAdmin(form.photoBase64, `📷 Photo for order #${orderId}`).catch(()=>{});
-}
+    // Fire-and-forget admin notifications (do not block response)
+    notifyAdminOrder({
+      id: orderId,
+      name: form?.name || prof?.name || "",
+      phone: form?.phone || prof?.phone || "",
+      address: form?.address || prof?.address || "",
+      slot: form?.slot || prof?.delivery_slot || "",
+      note: form?.note || "",
+      total, payment_method: paymentMethod
+    }).catch(()=>{});
+
+    if (form?.photoBase64) {
+      // photo upload failure must NOT break the order flow
+      sendPhotoToAdmin(form.photoBase64, `Order #${orderId} location photo`).catch(()=>{});
+    }
 
     if (paymentMethod === "COD") {
       return res.json({ ok: true, orderId, total, method: "COD" });
     }
 
     if (paymentMethod === "UPI") {
-      // UPI expects plain number string for amount
       const link = buildUpiLink({
         pa: process.env.UPI_PAYEE || "yourupi@okbank",
         pn: process.env.UPI_NAME || "South Asia Mart",
-        am: (total / 100).toFixed(2),
+        am: rupees(total),
         tn: `Order ${orderId}`,
       });
       return res.json({ ok: true, orderId, total, method: "UPI", upi: { link } });
@@ -549,25 +540,22 @@ app.post("/order", async (req, res) => {
 
     if (paymentMethod === "ONLINE") {
       if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok:false, error:"ONLINE_DISABLED" });
-      const prices = detailed.map(d => ({ label: d.title, amount: d.price * d.qty }));
+      // Example: create invoice link (Telegram Payments)
       const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method:"POST", headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           title: "South Asia Mart Order",
-          description: `${form?.name || ""} · ${form?.phone || ""}`,
+          description: `Order #${orderId}`,
           payload: "order-" + orderId,
           provider_token: process.env.PROVIDER_TOKEN,
           currency: "INR",
-          prices,
-          need_name: true,
-          need_shipping_address: true,
-          is_flexible: false,
-        }),
+          prices: detailed.map(d => ({ label: d.title, amount: d.price * d.qty })),
+          need_name: false, need_shipping_address: false, is_flexible: false
+        })
       });
       const json = await resp.json();
-      if (!json.ok) return res.status(500).json(json);
-      return res.json({ ok:true, link: json.result, total });
+      if (!json.ok) return res.status(500).json({ ok:false, error:"PAYMENT_LINK_FAILED", detail: json });
+      return res.json({ ok:true, link: json.result, orderId, total });
     }
 
     return res.status(400).json({ ok: false, error: "UNSUPPORTED_METHOD" });
@@ -577,54 +565,7 @@ app.post("/order", async (req, res) => {
   }
 });
 
-// ===== Online invoice (needs PROVIDER_TOKEN) =====
-app.post("/checkout", async (req, res) => {
-  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
-  try {
-    if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok: false, error: "ONLINE_DISABLED" });
-    const { initData, items = [], form } = req.body || {};
-    const r = verifyInitData(initData, process.env.BOT_TOKEN);
-    if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
-
-    const ids = items.map(i => i.id);
-    const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [ids]);
-    const map = new Map(q.rows.map(r => [r.id, r]));
-    let total = 0, restricted = false;
-    const prices = items.map(({ id, qty = 1 }) => {
-      const p = map.get(id);
-      if (p?.age_restricted) restricted = true;
-      const amount = (p?.price || 0) * qty;
-      total += amount;
-      return { label: p?.title || id, amount };
-    });
-    if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
-    if (restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_ONLINE_BLOCKED" });
-
-    const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: "South Asia Mart Order",
-        description: `${form?.name || ""} · ${form?.phone || ""}`,
-        payload: "order-" + Date.now(),
-        provider_token: process.env.PROVIDER_TOKEN,
-        currency: "INR",
-        prices,
-        need_name: true,
-        need_shipping_address: true,
-        is_flexible: false,
-      }),
-    });
-    const json = await resp.json();
-    if (!json.ok) return res.status(500).json(json);
-    res.json({ ok: true, link: json.result, total });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-// ===== Telegram webhook (contact/location helpers) =====
+// ===== Telegram webhook (contact/location collection) =====
 app.post("/telegram/webhook", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
@@ -633,33 +574,31 @@ app.post("/telegram/webhook", async (req, res) => {
     const chatId = msg?.chat?.id;
     const uid = msg?.from?.id;
 
-    // /start sharephone -> show keyboard to request contact
     const txt = (msg?.text || "").trim();
     if (/^\/start(?:\s+sharephone)?$/i.test(txt)) {
-      await tgSend(chatId,
+      await tgSendMessage(
+        chatId,
         "Tap the button below to share your phone number.",
         { keyboard: [[{ text: "Share my phone", request_contact: true }]], resize_keyboard: true, one_time_keyboard: true }
       );
     }
 
-    // Contact shared
     if (msg?.contact && (msg.contact.user_id === uid || !msg.contact.user_id)) {
       await pool.query(`
         insert into profiles(tg_user_id, phone, updated_at)
         values($1,$2,now())
         on conflict (tg_user_id) do update set phone=$2, updated_at=now()
       `, [uid, msg.contact.phone_number || null]);
-      await tgSend(chatId, "Thanks! Phone number saved ✅");
+      await tgSendMessage(chatId, "Thanks! Phone number saved ✅");
     }
 
-    // Location shared (optional; not triggered by your Mini App anymore)
     if (msg?.location) {
       await pool.query(`
         insert into profiles(tg_user_id, geo_lat, geo_lon, updated_at)
         values($1,$2,$3,now())
         on conflict (tg_user_id) do update set geo_lat=$2, geo_lon=$3, updated_at=now()
       `, [uid, msg.location.latitude, msg.location.longitude]);
-      await tgSend(chatId, "Location saved ✅");
+      await tgSendMessage(chatId, "Location saved ✅");
     }
 
     res.sendStatus(200);
