@@ -6,8 +6,7 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 const app = express();
-// allow up to ~5MB so photo data-URL can pass (front-end resizes, but be safe)
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "5mb" })); // allow photo data-url
 app.use(
   cors({
     origin: [/\.vercel\.app$/, /localhost:\d+$/],
@@ -51,12 +50,10 @@ function verifyInitData(initData, botToken) {
   const params = new URLSearchParams(initData);
   const hash = params.get("hash");
   params.delete("hash");
-
   const data = [];
   for (const [k, v] of params.entries()) data.push(`${k}=${v}`);
   data.sort();
   const dataCheckString = data.join("\n");
-
   const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
   const calcHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
   const ok = hash && crypto.timingSafeEqual(Buffer.from(calcHash), Buffer.from(hash));
@@ -68,7 +65,6 @@ function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) 
   return `upi://pay?${params.toString()}`;
 }
 
-// Small telegram wrappers
 async function tgSendMessage(chatId, text, replyMarkup = null) {
   if (!process.env.BOT_TOKEN || !chatId) return;
   const body = { chat_id: chatId, text, parse_mode: "HTML" };
@@ -78,7 +74,6 @@ async function tgSendMessage(chatId, text, replyMarkup = null) {
   }).catch(()=>{});
 }
 function parseDataUrlToBuffer(dataUrl) {
-  // data:[<mediatype>][;base64],<data>
   if (!dataUrl || typeof dataUrl !== "string") return null;
   const m = dataUrl.match(/^data:(.+?);base64,(.*)$/);
   if (!m) return null;
@@ -87,21 +82,16 @@ function parseDataUrlToBuffer(dataUrl) {
   return { mime, buf };
 }
 async function sendPhotoToAdmin(base64Data, caption = "") {
-  // Non-fatal helper; swallow errors.
   try {
     const adminChat = process.env.ADMIN_CHAT_ID || process.env.OWNER_ID;
     if (!adminChat || !process.env.BOT_TOKEN || !base64Data) return;
-
     const parsed = parseDataUrlToBuffer(base64Data);
     if (!parsed) return;
-
-    // send as multipart/form-data
     const url = `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`;
     const form = new FormData();
     form.set("chat_id", adminChat);
     form.set("caption", caption);
     form.set("photo", new Blob([parsed.buf], { type: parsed.mime }), "location.jpg");
-
     await fetch(url, { method: "POST", body: form }).catch(()=>{});
   } catch { /* ignore */ }
 }
@@ -185,6 +175,36 @@ insert into products(id,title,price,category,image,age_restricted,stock) values
 on conflict (id) do nothing;
 `;
 
+// ===== Admin auth =====
+function requireAdmin(req, res, next) {
+  const key = req.headers["x-admin-key"];
+  if (!key || key !== process.env.ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  next();
+}
+
+// ===== MIGRATIONS (fix for missing columns) =====
+async function ensureMigrations() {
+  if (!pool) return;
+  // Add geo columns to orders if they’re missing (idempotent)
+  await pool.query(`
+    alter table if exists orders
+      add column if not exists geo_lat double precision;
+  `);
+  await pool.query(`
+    alter table if exists orders
+      add column if not exists geo_lon double precision;
+  `);
+}
+
+// Run migrations at startup (non-blocking failure)
+(async () => { try { await ensureMigrations(); } catch (e) { console.warn("ensureMigrations:", e?.message || e); } })();
+
+// Manual migrate endpoint (handy for future changes)
+app.post("/admin/migrate", requireAdmin, async (_req, res) => {
+  try { await ensureMigrations(); res.json({ ok:true }); }
+  catch (e) { console.error(e); res.status(500).json({ ok:false, error:"MIGRATE_FAILED" }); }
+});
+
 // ===== Health =====
 app.get("/", (_req, res) => res.json({ ok: true, service: "backend-alive" }));
 
@@ -197,17 +217,12 @@ app.post("/verify", (req, res) => {
   res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
 });
 
-// ===== Admin auth =====
-function requireAdmin(req, res, next) {
-  const key = req.headers["x-admin-key"];
-  if (!key || key !== process.env.ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-  next();
-}
-
 // ===== Admin: schema + seed =====
 app.post("/admin/init", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query(SCHEMA_SQL);
+  // also run migrations as part of init (safe)
+  await ensureMigrations();
   res.json({ ok: true });
 });
 app.post("/admin/seed", requireAdmin, async (_req, res) => {
@@ -377,7 +392,6 @@ app.post("/me", async (req, res) => {
     const id = tgUser?.id;
     const name = [tgUser?.first_name, tgUser?.last_name].filter(Boolean).join(" ").trim() || tgUser?.username || "Customer";
 
-    // upsert skeleton profile if missing
     await pool.query(`
       insert into profiles(tg_user_id, name, username)
       values($1,$2,$3)
@@ -508,7 +522,6 @@ app.post("/order", async (req, res) => {
       );
     }
 
-    // Fire-and-forget admin notifications (do not block response)
     notifyAdminOrder({
       id: orderId,
       name: form?.name || prof?.name || "",
@@ -520,7 +533,6 @@ app.post("/order", async (req, res) => {
     }).catch(()=>{});
 
     if (form?.photoBase64) {
-      // photo upload failure must NOT break the order flow
       sendPhotoToAdmin(form.photoBase64, `Order #${orderId} location photo`).catch(()=>{});
     }
 
@@ -540,7 +552,6 @@ app.post("/order", async (req, res) => {
 
     if (paymentMethod === "ONLINE") {
       if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok:false, error:"ONLINE_DISABLED" });
-      // Example: create invoice link (Telegram Payments)
       const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
         method:"POST", headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
