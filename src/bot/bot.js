@@ -1,14 +1,15 @@
 // src/bot/bot.js
 import 'dotenv/config';
-import { Telegraf, Markup, session } from 'telegraf';
+import { Telegraf, Markup } from 'telegraf';
 import fetch from 'node-fetch';
 
+/* ========= ENV ========= */
 const BOT_TOKEN       = process.env.BOT_TOKEN;
 const WEBAPP_URL      = process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/';
 const API_URL         = process.env.API_URL || '';
-const BOT_API_KEY     = process.env.BOT_API_KEY || '';             // must match backend
+const BOT_API_KEY     = process.env.BOT_API_KEY || ''; // must match backend
 const CHANNEL_ID      = (process.env.CHANNEL_ID || '@SouthAsiaMartChannel').toString();
-const SUPPORT_CHAT_ID = (process.env.SUPPORT_CHAT_ID || '').toString();   // e.g. -1001234567890
+const SUPPORT_CHAT_ID = (process.env.SUPPORT_CHAT_ID || '').toString(); // e.g. -100123...
 const OWNER_ID        = (process.env.OWNER_ID || '').toString();
 
 if (!BOT_TOKEN) {
@@ -17,21 +18,30 @@ if (!BOT_TOKEN) {
 }
 
 let BOT_USERNAME = '';
-
-/* ───────────────────────── Bot bootstrap ───────────────────────── */
 const bot = new Telegraf(BOT_TOKEN);
-// enable per-chat ephemeral state used by the reply flow
-bot.use(session());
 
-/* ───────────────────────── Utilities ───────────────────────────── */
+/* ========= SMALL UTILS ========= */
+const isOwner = (ctx) => OWNER_ID && ctx.from?.id?.toString() === OWNER_ID;
+
+function shopKeyboard() {
+  return {
+    keyboard: [
+      [{ text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }],
+      [{ text: '📦 My Orders' }, { text: '🆘 Support' }]
+    ],
+    resize_keyboard: true,
+    is_persistent: true
+  };
+}
+
 async function deleteWebhookIfAny() {
   try {
     const info = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo`).then(r => r.json());
     if (info?.result?.url) {
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`, { method: 'POST' });
-      console.log('Webhook removed, using long polling.');
+      console.log('[bot] Webhook deleted → using long polling');
     } else {
-      console.log('No webhook set (good). Using long polling.');
+      console.log('[bot] No webhook set (good). Using long polling.');
     }
   } catch (e) {
     console.warn('Webhook check failed:', e?.message || e);
@@ -47,34 +57,17 @@ async function setChatMenuButton() {
         menu_button: { type: 'web_app', text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }
       })
     }).then(r => r.json());
-    if (resp.ok) console.log('✅ Menu button set');
+    if (resp.ok) console.log('✅ Chat menu button set');
     else console.warn('⚠️ setChatMenuButton failed:', resp);
   } catch (e) {
     console.warn('setChatMenuButton error:', e?.message || e);
   }
 }
 
-function isOwner(ctx) {
-  return OWNER_ID && ctx.from?.id?.toString() === OWNER_ID;
-}
-
-function shopKeyboard() {
-  return {
-    keyboard: [
-      [{ text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }],
-      [{ text: '📦 My Orders' }, { text: '🆘 Support' }]
-    ],
-    resize_keyboard: true,
-    is_persistent: true
-  };
-}
-
-/* ───────────────────────── Diagnostics ─────────────────────────── */
+/* ========= DIAGNOSTICS / ADMIN ========= */
 bot.command('whoami', (ctx) => {
   const id = ctx.from?.id?.toString();
-  ctx.reply(
-    `Your ID: ${id}\nOWNER_ID: ${OWNER_ID || '(not set)'}\nOwner? ${isOwner(ctx) ? 'YES ✅' : 'NO ❌'}`
-  );
+  ctx.reply(`Your ID: ${id}\nOWNER_ID: ${OWNER_ID || '(not set)'}\nOwner? ${isOwner(ctx) ? 'YES ✅' : 'NO ❌'}`);
 });
 
 bot.command('ping', (ctx) => ctx.reply('pong ✅'));
@@ -85,36 +78,13 @@ bot.command('setmenu', async (ctx) => {
   ctx.reply('✅ Menu button set');
 });
 
-/* Debug helpers (safe to keep; remove later if you wish) */
-bot.command('envcheck', (ctx) => {
-  const msg =
-`SUPPORT_CHAT_ID = ${SUPPORT_CHAT_ID || '(unset)'}
-API_URL         = ${API_URL || '(unset)'}
-CHANNEL_ID      = ${CHANNEL_ID || '(unset)'}
-BOT_USERNAME    = ${BOT_USERNAME || '(unknown)'}
-BOT_API_KEY     = ${BOT_API_KEY ? '(set)' : '(missing)'}
-(Only SUPPORT_CHAT_ID, API_URL and BOT_API_KEY matter for /myorders & support replies)`;
-  return ctx.reply('```txt\n' + msg + '\n```', { parse_mode: 'Markdown' });
+// whereami → only replies inside groups/channels
+bot.command('whereami', (ctx) => {
+  const cid = ctx.chat?.id?.toString();
+  ctx.reply(`chat.id = ${cid}`);
 });
 
-bot.command('supportping', async (ctx) => {
-  try {
-    if (!SUPPORT_CHAT_ID) return ctx.reply('❌ SUPPORT_CHAT_ID is not set.');
-    await bot.telegram.sendMessage(
-      SUPPORT_CHAT_ID,
-      `🔔 supportping from ${BOT_USERNAME} (${new Date().toISOString()})`
-    );
-    return ctx.reply('✅ Sent ping to SUPPORT_CHAT_ID. If it’s not visible in the group, the ID is wrong or the bot lacks rights.');
-  } catch (e) {
-    return ctx.reply('❌ Failed to send: ' + (e?.response?.description || e.message));
-  }
-});
-
-// Print chat.id anywhere (group, channel, DM)
-bot.command('whereami', (ctx) => ctx.reply(`chat.id = ${ctx.chat?.id}`));
-bot.command('forcewhere', (ctx) => ctx.reply(`chat.id = ${ctx.chat?.id}`));
-
-/* ───────────────────────── User flow ───────────────────────────── */
+/* ========= START & SIMPLE FLOWS ========= */
 bot.start(async (ctx) => {
   await setChatMenuButton();
   await ctx.reply(
@@ -124,17 +94,17 @@ bot.start(async (ctx) => {
 });
 
 bot.hears('🆘 Support', (ctx) =>
-  ctx.reply('Send me your message here. Our team will reply shortly. 🙌', { reply_markup: shopKeyboard() })
+  ctx.reply('Send your message here. Our team will reply shortly. 🙌', { reply_markup: shopKeyboard() })
 );
 
-/* ───────────────────────── Orders: /myorders ───────────────────── */
+/* ========= ORDERS: /myorders ========= */
 bot.hears('📦 My Orders', async (ctx) => showOrders(ctx));
 bot.command('myorders', async (ctx) => showOrders(ctx));
 
 async function showOrders(ctx) {
   try {
     if (!API_URL || !BOT_API_KEY) {
-      return ctx.reply('Orders feature is not configured yet (BOT_API_KEY or API_URL missing).');
+      return ctx.reply('Orders feature is not configured yet (API_URL or BOT_API_KEY missing).');
     }
     const res = await fetch(`${API_URL}/myorders`, {
       method: 'POST',
@@ -142,25 +112,22 @@ async function showOrders(ctx) {
       body: JSON.stringify({ tg_user_id: ctx.from.id })
     });
     const json = await res.json();
-
     if (!json.ok) throw new Error(json.error || 'Fetch failed');
 
     if (!json.items?.length) {
       return ctx.reply('You have no orders yet. Tap 🛒 Shop Now to begin!', { reply_markup: shopKeyboard() });
     }
-
     const lines = json.items.slice(0, 10).map(o =>
       `#${o.id} — ₹${(o.total/100).toFixed(2)} — ${o.payment_method} — ${o.status} — ${new Date(o.created_at).toLocaleString()}`
     );
     await ctx.replyWithMarkdown(`🧾 *Your recent orders*\n${lines.join('\n')}`, { reply_markup: shopKeyboard() });
-
   } catch (e) {
     console.error('myorders error:', e);
     ctx.reply('Sorry, failed to fetch your orders.');
   }
 }
 
-/* ───────────────── Channel “Shop Now” post ─────────────────────── */
+/* ========= CHANNEL POST (Shop Now) ========= */
 bot.command('postshop', async (ctx) => {
   try {
     if (!isOwner(ctx)) return ctx.reply('❌ Unauthorized.');
@@ -168,10 +135,7 @@ bot.command('postshop', async (ctx) => {
     await bot.telegram.sendMessage(
       CHANNEL_ID,
       '🛒 *Welcome to South Asia Mart!* Tap below to start shopping 👇',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: [[{ text: '🛍️ Shop Now', url: startAppUrl }]] }
-      }
+      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🛍️ Shop Now', url: startAppUrl }]] } }
     );
     ctx.reply('✅ Posted "Shop Now" to the channel. Pin it there.');
   } catch (err) {
@@ -180,131 +144,125 @@ bot.command('postshop', async (ctx) => {
   }
 });
 
-/* ---------------- Two-way support relay (hardened) ----------------
-   - User sends text/photo → forward to SUPPORT_CHAT_ID with a Reply button
-   - Agent taps Reply → we put the agent into "reply mode" to that user (2 min)
-   - Agent's next message in the support group goes back to that user
-------------------------------------------------------------------- */
+/* ========= TWO-WAY SUPPORT: robust & stateless =========
+   - DM from user → relay to support group with an inline “Reply to …” button
+   - In support group:
+      • tap button (reply-mode for 2 minutes)
+      • OR simply reply to the bot’s forwarded message (it parses user ID from the header)
+   - Uses in-memory map (adminId -> {userId, expires})
+*/
+const replyMap = new Map(); // adminId -> { userId, expires }
+const REPLY_TTL_MS = 2 * 60 * 1000;
 
-import { Markup } from 'telegraf';
+// Tiny helper to get a friendly name
+function prettyUser(u) {
+  const parts = [u?.first_name, u?.last_name].filter(Boolean);
+  let name = parts.join(' ').trim();
+  if (!name && u?.username) name = `@${u.username}`;
+  return name || `User ${u?.id || ''}`.trim();
+}
 
-// Keep a per-agent reply target for 2 minutes
-const replyMap = new Map(); // agentId -> { userId, until }
+// 1) Relay from user DM → support group
+bot.on(['message'], async (ctx, next) => {
+  try {
+    const chatType = ctx.chat?.type;
+    if (chatType !== 'private') return next && next();
+    if (!SUPPORT_CHAT_ID) return next && next();
 
-// Clean up expired entries every minute
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of replyMap.entries()) {
-    if (!v || v.until < now) replyMap.delete(k);
-  }
-}, 60_000);
+    // Ignore pure commands like /myorders, /start etc — they have their own handlers
+    if (ctx.message?.text && /^\/\w+/.test(ctx.message.text)) return next && next();
 
-// 1) Relay messages from users (DMs) to the support group
-bot.on(
-  ['text', 'photo', 'document', 'voice', 'video', 'video_note', 'sticker', 'location', 'contact'],
-  async (ctx, next) => {
-    try {
-      // Only relay private chat messages from users to the support group
-      if (ctx.chat?.type !== 'private') return next && next();
-      if (!SUPPORT_CHAT_ID) return next && next();
+    const u = ctx.from || {};
+    const title = prettyUser(u);
+    const header = `From: *${title}*\nID: \`${u.id}\``;
 
-      const u = ctx.from || {};
-      const title =
-        `👤 ${[u.first_name, u.last_name].filter(Boolean).join(' ')}` +
-        (u.username ? ` (@${u.username})` : '');
-      const header = `From: *${title}*\nID: \`${u.id}\``;
+    const replyBtn = Markup.inlineKeyboard([
+      [Markup.button.callback(`Reply to ${u.first_name || 'user'}`, `reply:${u.id}`)]
+    ]);
 
-      const replyBtn = Markup.inlineKeyboard([
-        [Markup.button.callback(`Reply to ${u.first_name || 'user'}`, `reply:${u.id}`)]
-      ]);
-
-      if (ctx.message.photo) {
-        const fileId = ctx.message.photo.slice(-1)[0].file_id;
-        await ctx.telegram.sendPhoto(SUPPORT_CHAT_ID, fileId, {
-          caption: header + (ctx.message.caption ? `\n\n${ctx.message.caption}` : ''),
-          parse_mode: 'Markdown',
-          ...replyBtn
-        });
-      } else if (ctx.message.text) {
-        await ctx.telegram.sendMessage(
-          SUPPORT_CHAT_ID,
-          `${header}\n\n${ctx.message.text}`,
-          { parse_mode: 'Markdown', ...replyBtn }
-        );
-      } else {
-        // fallback: forward + attach header
-        await ctx.forwardMessage(SUPPORT_CHAT_ID);
-        await ctx.telegram.sendMessage(SUPPORT_CHAT_ID, header, {
-          parse_mode: 'Markdown',
-          ...replyBtn
-        });
-      }
-    } catch (e) {
-      console.warn('relay -> support failed:', e?.message || e);
+    if (ctx.message.photo) {
+      const fileId = ctx.message.photo.slice(-1)[0].file_id;
+      await ctx.telegram.sendPhoto(SUPPORT_CHAT_ID, fileId, { caption: header, parse_mode: 'Markdown', ...replyBtn });
+    } else if (ctx.message.text) {
+      await ctx.telegram.sendMessage(SUPPORT_CHAT_ID, `${header}\n\n${ctx.message.text}`, { parse_mode: 'Markdown', ...replyBtn });
+    } else if (ctx.message.document) {
+      await ctx.telegram.sendDocument(SUPPORT_CHAT_ID, ctx.message.document.file_id, { caption: header, parse_mode: 'Markdown', ...replyBtn });
+    } else if (ctx.message.voice) {
+      await ctx.telegram.sendVoice(SUPPORT_CHAT_ID, ctx.message.voice.file_id, { caption: header, parse_mode: 'Markdown', ...replyBtn });
+    } else if (ctx.message.video) {
+      await ctx.telegram.sendVideo(SUPPORT_CHAT_ID, ctx.message.video.file_id, { caption: header, parse_mode: 'Markdown', ...replyBtn });
+    } else {
+      // fallback: forward message + header
+      await ctx.forwardMessage(SUPPORT_CHAT_ID);
+      await ctx.telegram.sendMessage(SUPPORT_CHAT_ID, header, { parse_mode: 'Markdown', ...replyBtn });
     }
+  } catch (e) {
+    console.warn('relay -> support failed:', e?.message || e);
   }
-);
+});
 
-// 2) Agent taps “Reply” in the support group → store routing for that agent
+// 2) Admin taps “Reply” button → enter reply mode for 2 minutes
 bot.action(/reply:(\d+)/, async (ctx) => {
   try {
-    if (ctx.chat?.id?.toString() !== SUPPORT_CHAT_ID) return ctx.answerCbQuery('Use in support group');
+    if (ctx.chat?.id?.toString() !== SUPPORT_CHAT_ID) return ctx.answerCbQuery('Not here');
     const userId = ctx.match[1];
-    const agentId = ctx.from?.id?.toString();
-    if (!agentId) return ctx.answerCbQuery('Missing agent id');
-
-    replyMap.set(agentId, { userId, until: Date.now() + 2 * 60 * 1000 }); // 2 minutes
+    const adminId = ctx.from?.id?.toString();
+    const until = Date.now() + REPLY_TTL_MS;
+    replyMap.set(adminId, { userId, expires: until });
     await ctx.answerCbQuery();
-    await ctx.reply(`Replying to user ID ${userId}. Send your message now (text/photo) within 2 minutes.`);
+    await ctx.reply(`Replying to user ID ${userId}. Send your message now (text/photo).`);
   } catch (e) {
     console.warn('reply action error:', e?.message || e);
   }
 });
 
-// 3) Any message in the support group:
-//    - if it's a reply to a bot header that contains "ID: <number>", use that
-//    - else if the agent is in replyMap, use that
-bot.on(['text', 'photo'], async (ctx, next) => {
+// 3) Support group → user (reply-mode or reply-to forwarded header)
+bot.on(['message'], async (ctx, next) => {
   try {
     if (ctx.chat?.id?.toString() !== SUPPORT_CHAT_ID) return next && next();
 
-    let targetUserId = null;
-
-    // A) Check if it's a reply to our header (contains "ID: <number>")
-    const repliedText = ctx.message?.reply_to_message?.text || ctx.message?.reply_to_message?.caption;
-    if (repliedText) {
-      const m = repliedText.match(/ID:\s*`?(\d+)`?/);
-      if (m) targetUserId = m[1];
+    // try reply-mode first
+    const adminId = ctx.from?.id?.toString();
+    const entry = replyMap.get(adminId);
+    let userId = null;
+    if (entry && entry.expires > Date.now()) {
+      userId = entry.userId;
+    } else {
+      replyMap.delete(adminId);
     }
 
-    // B) Otherwise, check agent replyMap
-    if (!targetUserId) {
-      const agentId = ctx.from?.id?.toString();
-      const entry = replyMap.get(agentId);
-      if (entry && entry.until > Date.now()) targetUserId = entry.userId;
+    // if not in reply-mode, parse the replied header "ID: `123`"
+    if (!userId && ctx.message?.reply_to_message?.text) {
+      const m = ctx.message.reply_to_message.text.match(/ID:\s*`?(\d+)`?/);
+      if (m) userId = m[1];
     }
 
-    if (!targetUserId) return next && next();
+    if (!userId) return next && next();
 
-    // Send back to user
     if (ctx.message.photo) {
       const fileId = ctx.message.photo.slice(-1)[0].file_id;
-      await ctx.telegram.sendPhoto(targetUserId, fileId, {
-        caption: ctx.message.caption || ''
-      });
+      await ctx.telegram.sendPhoto(userId, fileId, { caption: ctx.message.caption || '' });
     } else if (ctx.message.text) {
-      await ctx.telegram.sendMessage(targetUserId, ctx.message.text);
+      await ctx.telegram.sendMessage(userId, ctx.message.text);
+    } else if (ctx.message.document) {
+      await ctx.telegram.sendDocument(userId, ctx.message.document.file_id, { caption: ctx.message.caption || '' });
+    } else if (ctx.message.voice) {
+      await ctx.telegram.sendVoice(userId, ctx.message.voice.file_id, { caption: ctx.message.caption || '' });
+    } else if (ctx.message.video) {
+      await ctx.telegram.sendVideo(userId, ctx.message.video.file_id, { caption: ctx.message.caption || '' });
+    } else {
+      // unhandled type → ignore silently
+      return next && next();
     }
 
-    // Clear one-shot mapping for the agent
-    const agentId = ctx.from?.id?.toString();
-    if (agentId) replyMap.delete(agentId);
-
+    // one-shot: clear mapping
+    replyMap.delete(adminId);
   } catch (e) {
     console.warn('support -> user send failed:', e?.message || e);
   }
 });
-/* ───────────────── Errors & Launch ─────────────────────────────── */
+
+/* ========= ERRORS & LAUNCH ========= */
 bot.catch((err, ctx) => {
   console.error('Bot error for', ctx.updateType, err);
 });
@@ -319,9 +277,13 @@ bot.catch((err, ctx) => {
 
   await deleteWebhookIfAny();
 
-  const me = await bot.telegram.getMe();
-  BOT_USERNAME = me.username;
-  console.log('[bot] Bot username =', BOT_USERNAME);
+  try {
+    const me = await bot.telegram.getMe();
+    BOT_USERNAME = me.username;
+    console.log('[bot] Bot username =', BOT_USERNAME);
+  } catch (e) {
+    console.warn('getMe failed:', e?.message || e);
+  }
 
   await bot.launch();
   console.log('🤖 Bot running (long polling)…');
