@@ -3,27 +3,38 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
 
-const BOT_TOKEN  = process.env.BOT_TOKEN;
-const WEBAPP_URL = process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/';
-const CHANNEL_ID = (process.env.CHANNEL_ID || '@SouthAsiaMartChannel').toString();
-const OWNER_ID   = (process.env.OWNER_ID || '').toString();
+/* ───────────────────────────
+   Environment
+──────────────────────────── */
+const BOT_TOKEN   = process.env.BOT_TOKEN;
+const WEBAPP_URL  = process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/';
+const CHANNEL_ID  = (process.env.CHANNEL_ID || '@SouthAsiaMartChannel').toString();
+const OWNER_ID    = (process.env.OWNER_ID || '').toString();
+
+// NEW: backend base URL + shared secret for /myorders
+const API_URL     = process.env.API_URL     || 'https://telegram-mini-mart.onrender.com';
+const BOT_API_KEY = process.env.BOT_API_KEY || ''; // set this on BOTH backend and bot services
 
 if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN missing in environment variables');
   process.exit(1);
 }
 
-let BOT_USERNAME = ''; // we’ll fill this from getMe()
+let BOT_USERNAME = ''; // filled via getMe()
 
 console.log('──────── BOT STARTUP ────────');
-console.log('WEBAPP_URL =', WEBAPP_URL);
-console.log('CHANNEL_ID =', CHANNEL_ID);
-console.log('OWNER_ID   =', OWNER_ID || '(not set)');
+console.log('WEBAPP_URL  =', WEBAPP_URL);
+console.log('API_URL     =', API_URL);
+console.log('CHANNEL_ID  =', CHANNEL_ID);
+console.log('OWNER_ID    =', OWNER_ID || '(not set)');
+console.log('BOT_API_KEY =', BOT_API_KEY ? '(set)' : '(missing)');
 console.log('─────────────────────────────');
 
 const bot = new Telegraf(BOT_TOKEN);
 
-/* Utils */
+/* ───────────────────────────
+   Helpers
+──────────────────────────── */
 async function deleteWebhookIfAny() {
   try {
     const info = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo`).then(r => r.json());
@@ -48,7 +59,7 @@ async function setChatMenuButton() {
         menu_button: {
           type: 'web_app',
           text: '🛒 Shop Now',
-          web_app: { url: WEBAPP_URL } // valid only in private chats; ok here because it's a menu button
+          web_app: { url: WEBAPP_URL } // works in private chat; fine as a global menu button
         }
       })
     });
@@ -63,7 +74,7 @@ async function setChatMenuButton() {
 function shopKeyboard() {
   return {
     keyboard: [
-      [{ text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }], // private chat only
+      [{ text: '🛒 Shop Now', web_app: { url: WEBAPP_URL } }],
       [{ text: '📦 My Orders' }, { text: '🆘 Support' }]
     ],
     resize_keyboard: true,
@@ -76,7 +87,9 @@ function isOwner(ctx) {
   return OWNER_ID && myId === OWNER_ID;
 }
 
-/* Diagnostics */
+/* ───────────────────────────
+   Diagnostics
+──────────────────────────── */
 bot.command('whoami', (ctx) => {
   const myId = ctx.from?.id?.toString();
   return ctx.reply(
@@ -96,7 +109,9 @@ bot.command('setmenu', async (ctx) => {
   return ctx.reply('✅ Menu button set to WebApp.');
 });
 
-/* User flows (private chat) */
+/* ───────────────────────────
+   User flows (private chat)
+──────────────────────────── */
 bot.start(async (ctx) => {
   await setChatMenuButton();
   await ctx.reply(
@@ -106,20 +121,53 @@ bot.start(async (ctx) => {
 });
 
 bot.hears('📦 My Orders', (ctx) =>
-  ctx.reply('You don’t have any orders yet. Tap 🛒 Shop Now to begin!', { reply_markup: shopKeyboard() })
+  ctx.reply('Tip: type /myorders to see your recent orders.', { reply_markup: shopKeyboard() })
 );
 
 bot.hears('🆘 Support', (ctx) =>
   ctx.reply('Need help? Contact @YourSupportHandle.', { reply_markup: shopKeyboard() })
 );
 
-/* Channel post: use URL button with startapp deep-link (NOT web_app) */
+/* ───────────────────────────
+   /myorders — list recent orders
+──────────────────────────── */
+function fmtOrder(o) {
+  const dt = new Date(o.created_at);
+  const when = dt.toLocaleString('en-IN', { hour12: true });
+  return `#${o.id} — ${o.totalFormatted} — ${o.method?.toUpperCase() || '—'} — ${o.status} — ${when}`;
+}
+
+bot.command('myorders', async (ctx) => {
+  try {
+    if (!BOT_API_KEY) {
+      return ctx.reply('Orders feature is not configured yet (BOT_API_KEY missing).');
+    }
+    const url = `${API_URL}/bot/user-orders?uid=${ctx.from.id}&key=${encodeURIComponent(BOT_API_KEY)}`;
+    const r = await fetch(url).then(r => r.json());
+
+    if (!r.ok || !Array.isArray(r.items) || r.items.length === 0) {
+      return ctx.reply('You have no orders yet. Tap 🛒 Shop Now to begin!');
+    }
+
+    const lines = r.items.map(fmtOrder).join('\n');
+    await ctx.reply(`🧾 *Your recent orders*\n${lines}`, { parse_mode: 'Markdown' });
+  } catch (e) {
+    console.error(e);
+    ctx.reply('Sorry, failed to fetch your orders.');
+  }
+});
+
+/* ───────────────────────────
+   Channel post: "Shop Now" button
+   (use deep link URL instead of web_app)
+──────────────────────────── */
 bot.command('postshop', async (ctx) => {
   try {
     if (!isOwner(ctx)) return ctx.reply('❌ Unauthorized: only the owner can post to the channel.');
 
-    // Deep link to open the WebApp from a channel message
-    const startAppUrl = `https://t.me/${BOT_USERNAME}?startapp=shop`;
+    const startAppUrl = BOT_USERNAME
+      ? `https://t.me/${BOT_USERNAME}?startapp=shop`
+      : WEBAPP_URL; // fallback
 
     const resp = await bot.telegram.sendMessage(
       CHANNEL_ID,
@@ -127,7 +175,7 @@ bot.command('postshop', async (ctx) => {
       {
         parse_mode: 'Markdown',
         reply_markup: {
-          inline_keyboard: [[{ text: '🛍️ Shop Now', url: startAppUrl }]] // URL instead of web_app
+          inline_keyboard: [[{ text: '🛍️ Shop Now', url: startAppUrl }]] // URL (deep link), not web_app
         }
       }
     );
@@ -142,15 +190,17 @@ bot.command('postshop', async (ctx) => {
   }
 });
 
-/* Global error guard */
+/* ───────────────────────────
+   Global error guard & launch
+──────────────────────────── */
 bot.catch((err, ctx) => {
   console.error('Bot error for', ctx.updateType, err);
 });
 
-/* Launch */
 (async function main() {
   await deleteWebhookIfAny();
-  // fetch bot username to build t.me/<username>?startapp=... links
+
+  // fill BOT_USERNAME for deep links
   try {
     const me = await bot.telegram.getMe();
     BOT_USERNAME = me.username;
