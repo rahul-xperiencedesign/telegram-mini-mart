@@ -5,8 +5,12 @@ import crypto from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
 
+// Node >=18 has global fetch. If your logs ever show "fetch is not defined",
+// uncomment the next line and add node-fetch to dependencies.
+// import fetch from "node-fetch";
+
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "4mb" })); // allow base64 images comfortably
 app.use(
   cors({
     origin: [/\.vercel\.app$/, /localhost:\d+$/],
@@ -26,13 +30,17 @@ if (process.env.DATABASE_URL) {
 }
 
 // ===== Debug routes =====
-app.get("/", (_req, res) => res.json({ ok: true, service: "backend-alive" }));
-
-app.get("/__envcheck", (_req, res) => {
+app.get("/__envcheck", (req, res) => {
   const s = process.env.DATABASE_URL || "";
   let info = null;
   try { const u = new URL(s); info = { protocol: u.protocol, host: u.hostname, port: u.port }; } catch {}
-  res.json({ ok: true, hasDATABASE_URL: !!s, db: info });
+  res.json({
+    ok: true,
+    hasDATABASE_URL: !!s,
+    db: info,
+    hasBOT: !!process.env.BOT_TOKEN,
+    channel: process.env.CHANNEL_ID || null
+  });
 });
 
 app.get("/__dbping", async (_req, res) => {
@@ -46,7 +54,9 @@ app.get("/__dbping", async (_req, res) => {
   }
 });
 
-// ===== Helpers =====
+// ===== Helpers (Telegram + auth) =====
+const CHANNEL_ID = process.env.CHANNEL_ID || ""; // e.g. @SouthAsiaMartChannel or -1001234567890
+
 function verifyInitData(initData, botToken) {
   if (!initData) return { ok: false, reason: "missing initData" };
   const params = new URLSearchParams(initData);
@@ -65,7 +75,6 @@ function verifyInitData(initData, botToken) {
 }
 
 const rupees = (p) => (p / 100).toFixed(2);
-
 function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) {
   const params = new URLSearchParams({ pa, pn, am, cu, tn });
   return `upi://pay?${params.toString()}`;
@@ -82,23 +91,56 @@ async function tgSend(chatId, text, replyMarkup = null) {
   }).catch(()=>{});
 }
 
-// Optional photo helper used in admin notifications
-async function tgSendPhoto(chatId, base64, caption = "") {
-  if (!process.env.BOT_TOKEN || !base64) return { ok: false };
-  try {
-    const form = new FormData();
-    const buf = Buffer.from(base64.split(",").pop(), "base64");
-    form.append("chat_id", String(chatId));
-    form.append("caption", caption);
-    form.append("photo", new Blob([buf], { type: "image/jpeg" }), "location.jpg");
+// ----- New: Channel notify helpers -----
+function formatOrderText({ id, name, phone, address, slot, total, payment_method }) {
+  return [
+    `🧾 *New Order #${id}*`,
+    name   ? `👤 ${name}` : "👤 —",
+    phone  ? `📞 ${phone}` : "📞 —",
+    address? `🏠 ${address}` : "🏠 —",
+    slot   ? `🗓 ${slot}` : "🗓 —",
+    `💴 ₹${rupees(total)}`,
+    payment_method || ""
+  ].join("\n");
+}
 
-    const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, {
+async function notifyChannelOrder(row) {
+  try {
+    if (!process.env.BOT_TOKEN || !CHANNEL_ID) return;
+    const text = formatOrderText(row);
+    await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
       method: "POST",
-      body: form
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: CHANNEL_ID,
+        text,
+        parse_mode: "Markdown"
+      })
     });
-    return await resp.json();
-  } catch {
-    return { ok: false };
+  } catch (e) {
+    console.warn("notifyChannelOrder failed:", e?.message || e);
+  }
+}
+
+// Optional: forward a base64 image to channel (never blocks)
+async function notifyChannelPhoto(base64, caption) {
+  try {
+    if (!process.env.BOT_TOKEN || !CHANNEL_ID || !base64) return;
+    await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, {
+      method: "POST",
+      body: (() => {
+        // Use simple multipart to send base64 as file if needed; most clients send small images.
+        // For simplicity here we send as multipart with "photo" as base64 data URL.
+        const formData = new FormData();
+        formData.append("chat_id", CHANNEL_ID);
+        formData.append("caption", caption || "");
+        // Telegram accepts data URLs; if you want, convert to a Buffer/File.
+        formData.append("photo", base64);
+        return formData;
+      })()
+    });
+  } catch (e) {
+    console.warn("notifyChannelPhoto failed:", e?.message || e);
   }
 }
 
@@ -139,6 +181,7 @@ create table if not exists order_items (
   qty integer not null
 );
 
+-- Profile store keyed by Telegram user id
 create table if not exists profiles (
   tg_user_id bigint primary key,
   name text,
@@ -165,6 +208,18 @@ insert into products(id,title,price,category,image,age_restricted,stock) values
 on conflict (id) do nothing;
 `;
 
+// ===== Health =====
+app.get("/", (_req, res) => res.json({ ok: true, service: "backend-alive" }));
+
+// ===== Verify test =====
+app.post("/verify", (req, res) => {
+  const { initData } = req.body || {};
+  const r = verifyInitData(initData, process.env.BOT_TOKEN);
+  if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
+  const userRaw = new URLSearchParams(initData).get("user") || "{}";
+  res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
+});
+
 // ===== Admin auth =====
 function requireAdmin(req, res, next) {
   const key = req.headers["x-admin-key"];
@@ -178,20 +233,18 @@ app.post("/admin/init", requireAdmin, async (_req, res) => {
   await pool.query(SCHEMA_SQL);
   res.json({ ok: true });
 });
-
 app.post("/admin/seed", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query(SEED_SQL);
   res.json({ ok: true });
 });
 
-// ===== Admin: products (CRUD) =====
+// ===== Admin: products =====
 app.get("/admin/products", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const q = await pool.query("select * from products order by title");
   res.json({ ok: true, items: q.rows });
 });
-
 app.post("/admin/products", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const { id, title, price, category, image = "", age_restricted = false, stock = 999 } = req.body || {};
@@ -204,11 +257,120 @@ app.post("/admin/products", requireAdmin, async (req, res) => {
   );
   res.json({ ok: true });
 });
-
 app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   await pool.query("delete from products where id=$1", [req.params.id]);
   res.json({ ok: true });
+});
+app.post("/admin/products/bulk", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const { items = [] } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    for (const p of items) {
+      const { id, title, price, category, image = "", age_restricted = false, stock = 999 } = p;
+      if (!id || !title || !category) continue;
+      await client.query(
+        `insert into products(id,title,price,category,image,age_restricted,stock)
+         values($1,$2,$3,$4,$5,$6,$7)
+         on conflict(id) do update set
+           title=$2, price=$3, category=$4, image=$5, age_restricted=$6, stock=$7`,
+        [id, title, +price||0, category, image, !!age_restricted, +stock||0]
+      );
+    }
+    await client.query("commit");
+    res.json({ ok:true, upserted: items.length });
+  } catch (e) {
+    await client.query("rollback");
+    console.error(e);
+    res.status(500).json({ ok:false, error:"BULK_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
+// ===== Admin: stats + orders + profiles =====
+app.get("/admin/stats", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const prod = await pool.query("select count(*)::int as count from products");
+    const rev  = await pool.query("select coalesce(sum(total),0)::int as revenue from orders where status in ('paid','placed')");
+    const last7 = await pool.query(`
+      select to_char(date_trunc('day', created_at),'YYYY-MM-DD') as day,
+             count(*)::int as orders, coalesce(sum(total),0)::int as revenue
+      from orders where created_at > now() - interval '7 days'
+      group by 1 order by 1
+    `);
+    const low = await pool.query("select id,title,stock from products where stock <= 20 order by stock asc limit 20");
+    res.json({ ok:true,
+      product_count: prod.rows[0].count,
+      revenue: rev.rows[0].revenue,
+      last7: last7.rows,
+      low_stock: low.rows
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"STATS_FAILED" });
+  }
+});
+app.get("/admin/orders", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  try {
+    const { status, q, page = "1", pageSize = "20" } = req.query;
+    const limit = Math.min(parseInt(pageSize, 10) || 20, 100);
+    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+
+    const where = [];
+    const params = [];
+    if (status) { params.push(status); where.push(`status = $${params.length}`); }
+    if (q) {
+      params.push(`%${q}%`);
+      const i = params.length;
+      where.push(`(name ilike $${i} or phone ilike $${i} or address ilike $${i})`);
+    }
+    const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+
+    const items = (await pool.query(
+      `select id, name, phone, address, slot, note, total, status, created_at, geo_lat, geo_lon
+       from orders ${whereSql}
+       order by created_at desc
+       limit ${limit} offset ${offset}`,
+      params
+    )).rows;
+
+    const total = (await pool.query(
+      `select count(*)::int as count from orders ${whereSql}`, params
+    )).rows[0].count;
+
+    res.json({ ok:true, items, page:+page, pageSize:limit, total });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"ORDERS_FAILED" });
+  }
+});
+app.put("/admin/orders/:id/status", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const allowed = ["placed","paid","shipped","delivered","cancelled"];
+  const { status } = req.body || {};
+  if (!allowed.includes(status)) return res.status(400).json({ ok:false, error:"INVALID_STATUS" });
+  await pool.query("update orders set status=$1 where id=$2", [status, req.params.id]);
+  res.json({ ok:true });
+});
+app.get("/admin/profiles", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+  const { page = "1", pageSize = "50", q } = req.query;
+  const limit = Math.min(parseInt(pageSize, 10) || 50, 200);
+  const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+  const params = [];
+  let where = "";
+  if (q) { params.push(`%${q}%`); where = `where (name ilike $1 or phone ilike $1 or username ilike $1)`; }
+  const rows = (await pool.query(
+    `select tg_user_id, name, username, phone, address, delivery_slot, geo_lat, geo_lon, updated_at
+     from profiles ${where} order by updated_at desc limit ${limit} offset ${offset}`, params
+  )).rows;
+  const total = (await pool.query(`select count(*)::int as c from profiles ${where}`, params)).rows[0].c;
+  res.json({ ok:true, items: rows, page:+page, pageSize:limit, total });
 });
 
 // ===== Public catalog =====
@@ -217,7 +379,6 @@ app.get("/categories", async (_req, res) => {
   const q = await pool.query("select distinct category from products order by category");
   res.json({ ok: true, categories: q.rows.map(r => r.category) });
 });
-
 app.get("/products", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   const cat = req.query.category;
@@ -318,10 +479,9 @@ app.post("/cart/price", async (req, res) => {
   res.json({ ok: true, items: detailed, total, payments });
 });
 
-// ===== Place order (COD / UPI) + DM user confirmation =====
+// ===== Place order (COD / UPI) =====
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
-
   try {
     const { initData, items = [], paymentMethod, form } = req.body || {};
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
@@ -341,6 +501,7 @@ app.post("/order", async (req, res) => {
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
+    // Profile fallback
     const tgUser = JSON.parse(decodeURIComponent(new URLSearchParams(initData).get("user") || "{}"));
     const prof = (await pool.query("select * from profiles where tg_user_id=$1", [tgUser?.id || null])).rows[0];
 
@@ -361,7 +522,6 @@ app.post("/order", async (req, res) => {
         form?.geo?.lon ?? prof?.geo_lon ?? null
       ]
     );
-
     const orderId = ins.rows[0].id;
 
     for (const d of detailed) {
@@ -371,22 +531,23 @@ app.post("/order", async (req, res) => {
       );
     }
 
-    // ✅ Send confirmation to the USER
-    const totalFormatted = `₹${rupees(total)}`;
-    const openLink = process.env.WEBAPP_URL || "https://telegram-mini-mart.vercel.app/";
-    await tgSend(
-      tgUser?.id,
-      `✅ *Order #${orderId} placed!*  \nTotal: *${totalFormatted}*  \nMethod: *${paymentMethod}*  \n\nYou can open the shop anytime: ${openLink}\nType /myorders to view your recent orders.`,
-    );
+    // ---- Backend channel notification (reliable) ----
+    notifyChannelOrder({
+      id: orderId,
+      name: form?.name || prof?.name || "",
+      phone: form?.phone || prof?.phone || "",
+      address: form?.address || prof?.address || "",
+      slot: form?.slot || prof?.delivery_slot || "",
+      total,
+      payment_method: paymentMethod
+    });
 
-    // (Optional) forward a photo to admin/channel — safe-guard: do not fail on photo
-    if (form?.photoBase64 && process.env.ADMIN_CHAT_ID) {
-      await tgSendPhoto(process.env.ADMIN_CHAT_ID, form.photoBase64, `Order #${orderId} location photo`);
+    // If user attached a base64 "photo" (from the web app), forward it (best-effort)
+    if (form?.photoBase64) {
+      notifyChannelPhoto(form.photoBase64, `📍 Order #${orderId} location photo`);
     }
 
-    if (paymentMethod === "COD") {
-      return res.json({ ok: true, orderId, total, method: "COD" });
-    }
+    if (paymentMethod === "COD") return res.json({ ok: true, orderId, total, method: "COD" });
 
     if (paymentMethod === "UPI") {
       const link = buildUpiLink({
@@ -405,47 +566,54 @@ app.post("/order", async (req, res) => {
   }
 });
 
-// ===== “Bot only” endpoint: get recent orders for a user (used by /myorders) =====
-// GET /bot/user-orders?uid=123&key=SECRET
-app.get("/bot/user-orders", async (req, res) => {
+// ===== Online invoice (needs PROVIDER_TOKEN) =====
+app.post("/checkout", async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
-    if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+    if (!process.env.PROVIDER_TOKEN) return res.status(400).json({ ok: false, error: "ONLINE_DISABLED" });
+    const { initData, items = [], form } = req.body || {};
+    const r = verifyInitData(initData, process.env.BOT_TOKEN);
+    if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
-    const key = req.query.key || "";
-    if (!process.env.BOT_API_KEY || key !== process.env.BOT_API_KEY) {
-      return res.status(401).json({ ok:false, error:"UNAUTHORIZED" });
-    }
-
-    const uid = String(req.query.uid || "").trim();
-    if (!uid || !/^\d+$/.test(uid)) return res.status(400).json({ ok:false, error:"BAD_UID" });
-
-    const rows = (await pool.query(
-      `select id, total, payment_method, status, created_at
-         from orders
-        where tg_user_id = $1
-        order by created_at desc
-        limit 10`,
-      [uid]
-    )).rows;
-
-    res.json({
-      ok: true,
-      items: rows.map(r => ({
-        id: r.id,
-        total: r.total,
-        totalFormatted: `₹${rupees(r.total)}`,
-        method: r.payment_method,
-        status: r.status,
-        created_at: r.created_at
-      }))
+    const ids = items.map(i => i.id);
+    const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [ids]);
+    const map = new Map(q.rows.map(r => [r.id, r]));
+    let total = 0, restricted = false;
+    const prices = items.map(({ id, qty = 1 }) => {
+      const p = map.get(id);
+      if (p?.age_restricted) restricted = true;
+      const amount = (p?.price || 0) * qty;
+      total += amount;
+      return { label: p?.title || id, amount };
     });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok:false, error:"ORDERS_FETCH_FAILED" });
+    if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
+    if (restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_ONLINE_BLOCKED" });
+
+    const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "South Asia Mart Order",
+        description: `${form?.name || ""} · ${form?.phone || ""}`,
+        payload: "order-" + Date.now(),
+        provider_token: process.env.PROVIDER_TOKEN,
+        currency: "INR",
+        prices,
+        need_name: true,
+        need_shipping_address: true,
+        is_flexible: false,
+      }),
+    });
+    const json = await resp.json();
+    if (!json.ok) return res.status(500).json(json);
+    res.json({ ok: true, link: json.result, total });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
-// ===== Telegram webhook (for phone/location sharing – unchanged) =====
+// ===== Telegram webhook (collect phone/location if you ever enable it) =====
 app.post("/telegram/webhook", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
