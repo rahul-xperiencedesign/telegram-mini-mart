@@ -519,7 +519,11 @@ app.post("/cart/price", async (req, res) => {
   res.json({ ok: true, items: detailed, total, payments });
 });
 
+// ===== Price cart on server stays above… =====
+
+
 // ===== Orders — for bot /myorders (secure: x-bot-key) =====
+// keep this route OUTSIDE of /order
 app.post("/myorders", async (req, res) => {
   try {
     if (!process.env.BOT_API_KEY) {
@@ -529,13 +533,13 @@ app.post("/myorders", async (req, res) => {
     if (!key || key !== process.env.BOT_API_KEY) {
       return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
     }
+
     const { tg_user_id } = req.body || {};
     if (!tg_user_id) {
       return res.status(400).json({ ok: false, error: "MISSING_TG_USER_ID" });
     }
-    if (!pool) {
-      return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
-    }
+    if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+
     const q = await pool.query(
       `select id, total, payment_method, status, created_at
          from orders
@@ -544,6 +548,7 @@ app.post("/myorders", async (req, res) => {
         limit 20`,
       [tg_user_id]
     );
+
     return res.json({ ok: true, items: q.rows });
   } catch (e) {
     console.error("MYORDERS_FAILED:", e);
@@ -551,21 +556,24 @@ app.post("/myorders", async (req, res) => {
   }
 });
 
+
 // ===== Place order (COD / UPI) =====
+// keep this route as a separate sibling route
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
+
   try {
     const { initData, items = [], paymentMethod, form } = req.body || {};
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
     if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
-    // price + restricted check
     const ids = items.map(i => i.id);
     const q = await pool.query(
       "select id,title,price,age_restricted from products where id = any($1)",
       [ids]
     );
     const map = new Map(q.rows.map(r => [r.id, r]));
+
     let total = 0, restricted = false;
     const detailed = items.map(({ id, qty = 1 }) => {
       const p = map.get(id);
@@ -580,15 +588,15 @@ app.post("/order", async (req, res) => {
       return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
     }
 
-    // profile fallback
+    // Profile fallback
     const tgUser = JSON.parse(
       decodeURIComponent(new URLSearchParams(initData).get("user") || "{}")
     );
-    const prof = (
-      await pool.query("select * from profiles where tg_user_id=$1", [tgUser?.id || null])
-    ).rows[0];
+    const prof = (await pool.query(
+      "select * from profiles where tg_user_id=$1",
+      [tgUser?.id || null]
+    )).rows[0];
 
-    // create order
     const ins = await pool.query(
       `insert into orders(tg_user_id,name,phone,address,slot,note,total,payment_method,status,geo_lat,geo_lon)
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -607,9 +615,9 @@ app.post("/order", async (req, res) => {
         form?.geo?.lon ?? prof?.geo_lon ?? null
       ]
     );
+
     const orderId = ins.rows[0].id;
 
-    // items
     for (const d of detailed) {
       await pool.query(
         "insert into order_items(order_id,product_id,title,price,qty) values($1,$2,$3,$4,$5)",
@@ -617,7 +625,7 @@ app.post("/order", async (req, res) => {
       );
     }
 
-    // notify the channel (admin visibility)
+    // ---- Channel notification (best-effort; does not block the response)
     notifyChannelOrder({
       id: orderId,
       name: form?.name || prof?.name || "",
@@ -627,23 +635,30 @@ app.post("/order", async (req, res) => {
       total,
       payment_method: paymentMethod
     });
+
     if (form?.photoBase64) {
       notifyChannelPhoto(form.photoBase64, `📍 Order #${orderId} location photo`);
     }
 
-    // ✅ NEW: DM the customer a confirmation (non-blocking)
-    const buyerMsg =
-      `✅ *Order #${orderId} placed!*\n` +
-      `Total: *₹${rupees(total)}*\n` +
-      `Method: *${paymentMethod}*\n\n` +
-      `You can open the shop anytime: ${process.env.WEBAPP_URL || "https://telegram-mini-mart.vercel.app/"}\n` +
-      `Type /myorders to view your recent orders.`;
-    tgSendMd(tgUser?.id, buyerMsg); // fire-and-forget
+    // ---- DM confirmation to the buyer (Markdown)
+    if (tgUser?.id) {
+      const lineTotal = `*Total:* *₹${rupees(total)}*`;
+      const msg = [
+        "✅ *Order placed!*",
+        lineTotal,
+        `*Method:* *${paymentMethod || '—'}*`,
+        "",
+        `You can open the shop anytime: ${process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/'}`,
+        "Type /myorders to view your recent orders."
+      ].join("\n");
+      // uses the helper you added earlier
+      await tgSendMd(tgUser.id, msg);
+    }
 
-    // respond to webapp
     if (paymentMethod === "COD") {
       return res.json({ ok: true, orderId, total, method: "COD" });
     }
+
     if (paymentMethod === "UPI") {
       const link = buildUpiLink({
         pa: process.env.UPI_PAYEE || "yourupi@okbank",
@@ -653,13 +668,14 @@ app.post("/order", async (req, res) => {
       });
       return res.json({ ok: true, orderId, total, method: "UPI", upi: { link } });
     }
+
     return res.status(400).json({ ok: false, error: "UNSUPPORTED_METHOD" });
+
   } catch (e) {
     console.error(e);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
-
     // ---- Backend channel notification (reliable) ----
     notifyChannelOrder({
       id: orderId,
