@@ -498,6 +498,46 @@ app.post("/order", async (req, res) => {
       if (p?.age_restricted) restricted = true;
       return { id, title: p?.title || id, price, qty };
     });
+    // ===== Orders — for bot /myorders (secure: x-bot-key) =====
+// This endpoint is called by the bot when a user types /myorders.
+// It must be protected with the same BOT_API_KEY you set on both services.
+app.post("/myorders", async (req, res) => {
+  try {
+    if (!process.env.BOT_API_KEY) {
+      return res.status(500).json({ ok: false, error: "BOT_API_KEY_MISSING" });
+    }
+
+    // simple shared-secret guard so only our bot can call this
+    const key = req.headers["x-bot-key"];
+    if (!key || key !== process.env.BOT_API_KEY) {
+      return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+    }
+
+    const { tg_user_id } = req.body || {};
+    if (!tg_user_id) {
+      return res.status(400).json({ ok: false, error: "MISSING_TG_USER_ID" });
+    }
+
+    if (!pool) {
+      return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
+    }
+
+    // Return last 20 orders for this Telegram user
+    const q = await pool.query(
+      `select id, total, payment_method, status, created_at
+         from orders
+        where tg_user_id = $1
+        order by created_at desc
+        limit 20`,
+      [tg_user_id]
+    );
+
+    return res.json({ ok: true, items: q.rows });
+  } catch (e) {
+    console.error("MYORDERS_FAILED:", e);
+    return res.status(500).json({ ok: false, error: "MYORDERS_FAILED" });
+  }
+});
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
