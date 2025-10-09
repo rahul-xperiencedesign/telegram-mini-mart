@@ -5,9 +5,8 @@ import crypto from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
 
-// Node >=18 has global fetch. If your logs ever show "fetch is not defined",
-// uncomment the next line and add node-fetch to dependencies.
-// import fetch from "node-fetch";
+// Node >= 18 has global fetch/FormData via undici.
+// If logs ever show "fetch is not defined", add:  import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json({ limit: "4mb" })); // allow base64 images comfortably
@@ -29,8 +28,12 @@ if (process.env.DATABASE_URL) {
   console.warn("DATABASE_URL not set — DB endpoints will return DB_NOT_CONFIGURED.");
 }
 
+// ===== Constants (from env) =====
+const CHANNEL_ID = process.env.CHANNEL_ID || "";          // e.g. @SouthAsiaMartChannel or -100xxxxxxxxxx
+const BOT_API_KEY = process.env.BOT_API_KEY || "";        // shared secret for /myorders
+
 // ===== Debug routes =====
-app.get("/__envcheck", (req, res) => {
+app.get("/__envcheck", (_req, res) => {
   const s = process.env.DATABASE_URL || "";
   let info = null;
   try { const u = new URL(s); info = { protocol: u.protocol, host: u.hostname, port: u.port }; } catch {}
@@ -39,7 +42,7 @@ app.get("/__envcheck", (req, res) => {
     hasDATABASE_URL: !!s,
     db: info,
     hasBOT: !!process.env.BOT_TOKEN,
-    channel: process.env.CHANNEL_ID || null
+    channel: CHANNEL_ID || null
   });
 });
 
@@ -55,8 +58,6 @@ app.get("/__dbping", async (_req, res) => {
 });
 
 // ===== Helpers (Telegram + auth) =====
-const CHANNEL_ID = process.env.CHANNEL_ID || ""; // e.g. @SouthAsiaMartChannel or -1001234567890
-
 function verifyInitData(initData, botToken) {
   if (!initData) return { ok: false, reason: "missing initData" };
   const params = new URLSearchParams(initData);
@@ -80,6 +81,7 @@ function buildUpiLink({ pa, pn, am, cu = "INR", tn = "South Asia Mart order" }) 
   return `upi://pay?${params.toString()}`;
 }
 
+// Basic text send
 async function tgSend(chatId, text, replyMarkup = null) {
   if (!process.env.BOT_TOKEN) return;
   const body = { chat_id: chatId, text };
@@ -91,7 +93,30 @@ async function tgSend(chatId, text, replyMarkup = null) {
   }).catch(()=>{});
 }
 
-// ----- New: Channel notify helpers -----
+// Markdown send (for nice order confirmation)
+async function tgSendMarkdown(chatId, text) {
+  if (!process.env.BOT_TOKEN) return;
+  await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+  }).catch(()=>{});
+}
+
+// DM confirmation to user after placing an order
+async function notifyUserOrderPlaced(userId, orderId, total, method) {
+  if (!userId) return;
+  const shopUrl = process.env.WEBAPP_URL || "https://telegram-mini-mart.vercel.app/";
+  const text =
+    `✅ *Order #${orderId} placed!*\n` +
+    `Total: *₹${rupees(total)}*\n` +
+    `Method: *${method}*\n\n` +
+    `You can open the shop anytime: ${shopUrl}\n` +
+    `Type /myorders to view your recent orders.`;
+  await tgSendMarkdown(userId, text);
+}
+
+// ----- Channel notify helpers -----
 function formatOrderText({ id, name, phone, address, slot, total, payment_method }) {
   return [
     `🧾 *New Order #${id}*`,
@@ -122,22 +147,17 @@ async function notifyChannelOrder(row) {
   }
 }
 
-// Optional: forward a base64 image to channel (never blocks)
+// Optional: forward a base64 image to channel (best-effort)
 async function notifyChannelPhoto(base64, caption) {
   try {
     if (!process.env.BOT_TOKEN || !CHANNEL_ID || !base64) return;
+    const form = new FormData();
+    form.append("chat_id", CHANNEL_ID);
+    form.append("caption", caption || "");
+    form.append("photo", base64); // data URL or base64 string
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, {
       method: "POST",
-      body: (() => {
-        // Use simple multipart to send base64 as file if needed; most clients send small images.
-        // For simplicity here we send as multipart with "photo" as base64 data URL.
-        const formData = new FormData();
-        formData.append("chat_id", CHANNEL_ID);
-        formData.append("caption", caption || "");
-        // Telegram accepts data URLs; if you want, convert to a Buffer/File.
-        formData.append("photo", base64);
-        return formData;
-      })()
+      body: form
     });
   } catch (e) {
     console.warn("notifyChannelPhoto failed:", e?.message || e);
@@ -479,6 +499,35 @@ app.post("/cart/price", async (req, res) => {
   res.json({ ok: true, items: detailed, total, payments });
 });
 
+// ===== Orders — for bot /myorders (secure: x-bot-key) =====
+app.post("/myorders", async (req, res) => {
+  try {
+    if (!BOT_API_KEY) return res.status(500).json({ ok: false, error: "BOT_API_KEY_MISSING" });
+
+    const key = req.headers["x-bot-key"];
+    if (!key || key !== BOT_API_KEY) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+
+    if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
+
+    const { tg_user_id } = req.body || {};
+    if (!tg_user_id) return res.status(400).json({ ok: false, error: "MISSING_TG_USER_ID" });
+
+    const q = await pool.query(
+      `select id, total, payment_method, status, created_at
+         from orders
+        where tg_user_id = $1
+        order by created_at desc
+        limit 20`,
+      [tg_user_id]
+    );
+
+    res.json({ ok: true, items: q.rows });
+  } catch (e) {
+    console.error("MYORDERS_FAILED:", e);
+    res.status(500).json({ ok: false, error: "MYORDERS_FAILED" });
+  }
+});
+
 // ===== Place order (COD / UPI) =====
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
@@ -498,46 +547,7 @@ app.post("/order", async (req, res) => {
       if (p?.age_restricted) restricted = true;
       return { id, title: p?.title || id, price, qty };
     });
-    // ===== Orders — for bot /myorders (secure: x-bot-key) =====
-// This endpoint is called by the bot when a user types /myorders.
-// It must be protected with the same BOT_API_KEY you set on both services.
-app.post("/myorders", async (req, res) => {
-  try {
-    if (!process.env.BOT_API_KEY) {
-      return res.status(500).json({ ok: false, error: "BOT_API_KEY_MISSING" });
-    }
 
-    // simple shared-secret guard so only our bot can call this
-    const key = req.headers["x-bot-key"];
-    if (!key || key !== process.env.BOT_API_KEY) {
-      return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-    }
-
-    const { tg_user_id } = req.body || {};
-    if (!tg_user_id) {
-      return res.status(400).json({ ok: false, error: "MISSING_TG_USER_ID" });
-    }
-
-    if (!pool) {
-      return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
-    }
-
-    // Return last 20 orders for this Telegram user
-    const q = await pool.query(
-      `select id, total, payment_method, status, created_at
-         from orders
-        where tg_user_id = $1
-        order by created_at desc
-        limit 20`,
-      [tg_user_id]
-    );
-
-    return res.json({ ok: true, items: q.rows });
-  } catch (e) {
-    console.error("MYORDERS_FAILED:", e);
-    return res.status(500).json({ ok: false, error: "MYORDERS_FAILED" });
-  }
-});
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
     if (paymentMethod === "UPI" && restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
 
@@ -571,7 +581,7 @@ app.post("/myorders", async (req, res) => {
       );
     }
 
-    // ---- Backend channel notification (reliable) ----
+    // ---- Channel notification (reliable) ----
     notifyChannelOrder({
       id: orderId,
       name: form?.name || prof?.name || "",
@@ -582,12 +592,17 @@ app.post("/myorders", async (req, res) => {
       payment_method: paymentMethod
     });
 
-    // If user attached a base64 "photo" (from the web app), forward it (best-effort)
+    // Optional photo
     if (form?.photoBase64) {
       notifyChannelPhoto(form.photoBase64, `📍 Order #${orderId} location photo`);
     }
 
-    if (paymentMethod === "COD") return res.json({ ok: true, orderId, total, method: "COD" });
+    // ---- DM confirmation to the customer ----
+    try { await notifyUserOrderPlaced(tgUser?.id || null, orderId, total, paymentMethod); } catch {}
+
+    if (paymentMethod === "COD") {
+      return res.json({ ok: true, orderId, total, method: "COD" });
+    }
 
     if (paymentMethod === "UPI") {
       const link = buildUpiLink({
@@ -627,74 +642,4 @@ app.post("/checkout", async (req, res) => {
       return { label: p?.title || id, amount };
     });
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
-    if (restricted) return res.status(400).json({ ok: false, error: "RESTRICTED_ONLINE_BLOCKED" });
-
-    const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/createInvoiceLink`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: "South Asia Mart Order",
-        description: `${form?.name || ""} · ${form?.phone || ""}`,
-        payload: "order-" + Date.now(),
-        provider_token: process.env.PROVIDER_TOKEN,
-        currency: "INR",
-        prices,
-        need_name: true,
-        need_shipping_address: true,
-        is_flexible: false,
-      }),
-    });
-    const json = await resp.json();
-    if (!json.ok) return res.status(500).json(json);
-    res.json({ ok: true, link: json.result, total });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-// ===== Telegram webhook (collect phone/location if you ever enable it) =====
-app.post("/telegram/webhook", async (req, res) => {
-  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
-  try {
-    const up = req.body;
-    const msg = up?.message;
-    const chatId = msg?.chat?.id;
-    const uid = msg?.from?.id;
-
-    const txt = (msg?.text || "").trim();
-    if (/^\/start(?:\s+sharephone)?$/i.test(txt)) {
-      await tgSend(chatId,
-        "Tap the button below to share your phone number.",
-        { keyboard: [[{ text: "Share my phone", request_contact: true }]], resize_keyboard: true, one_time_keyboard: true }
-      );
-    }
-
-    if (msg?.contact && (msg.contact.user_id === uid || !msg.contact.user_id)) {
-      await pool.query(`
-        insert into profiles(tg_user_id, phone, updated_at)
-        values($1,$2,now())
-        on conflict (tg_user_id) do update set phone=$2, updated_at=now()
-      `, [uid, msg.contact.phone_number || null]);
-      await tgSend(chatId, "Thanks! Phone number saved ✅");
-    }
-
-    if (msg?.location) {
-      await pool.query(`
-        insert into profiles(tg_user_id, geo_lat, geo_lon, updated_at)
-        values($1,$2,$3,now())
-        on conflict (tg_user_id) do update set geo_lat=$2, geo_lon=$3, updated_at=now()
-      `, [uid, msg.location.latitude, msg.location.longitude]);
-      await tgSend(chatId, "Location saved ✅");
-    }
-
-    res.sendStatus(200);
-  } catch (e) {
-    console.error(e);
-    res.sendStatus(200);
-  }
-});
-
-// ===== Start server =====
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Backend running on :${PORT}`));
+    if (restricted) return res.status(400
