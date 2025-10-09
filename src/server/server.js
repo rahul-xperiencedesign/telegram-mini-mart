@@ -5,9 +5,8 @@ import crypto from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
 
-// Node >=18 has global fetch.
-// If your logs ever show "fetch is not defined", add:
-//   import fetch from "node-fetch";
+// Node >=18 has global fetch. If your logs ever show "fetch is not defined",
+// add:  import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json({ limit: "4mb" })); // allow base64 images comfortably
@@ -58,7 +57,7 @@ app.get("/__dbping", async (_req, res) => {
 });
 
 // ===== Helpers (Telegram + auth) =====
-const CHANNEL_ID = process.env.CHANNEL_ID || ""; // e.g. @SouthAsiaMartChannel or -100123...
+const CHANNEL_ID = process.env.CHANNEL_ID || ""; // e.g. @SouthAsiaMartChannel or -100...
 
 function verifyInitData(initData, botToken) {
   if (!initData) return { ok: false, reason: "missing initData" };
@@ -95,7 +94,6 @@ async function tgSend(chatId, text, replyMarkup = null) {
   }).catch(() => {});
 }
 
-// ✅ Add this new helper *right below* the existing one:
 async function tgSendMd(chatId, text) {
   if (!process.env.BOT_TOKEN) return;
   try {
@@ -519,11 +517,7 @@ app.post("/cart/price", async (req, res) => {
   res.json({ ok: true, items: detailed, total, payments });
 });
 
-// ===== Price cart on server stays above… =====
-
-
 // ===== Orders — for bot /myorders (secure: x-bot-key) =====
-// keep this route OUTSIDE of /order
 app.post("/myorders", async (req, res) => {
   try {
     if (!process.env.BOT_API_KEY) {
@@ -556,9 +550,7 @@ app.post("/myorders", async (req, res) => {
   }
 });
 
-
 // ===== Place order (COD / UPI) =====
-// keep this route as a separate sibling route
 app.post("/order", async (req, res) => {
   if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
 
@@ -625,7 +617,7 @@ app.post("/order", async (req, res) => {
       );
     }
 
-    // ---- Channel notification (best-effort; does not block the response)
+    // Channel notification (best-effort)
     notifyChannelOrder({
       id: orderId,
       name: form?.name || prof?.name || "",
@@ -636,22 +628,16 @@ app.post("/order", async (req, res) => {
       payment_method: paymentMethod
     });
 
-    if (form?.photoBase64) {
-      notifyChannelPhoto(form.photoBase64, `📍 Order #${orderId} location photo`);
-    }
-
-    // ---- DM confirmation to the buyer (Markdown)
+    // DM confirmation to the buyer
     if (tgUser?.id) {
-      const lineTotal = `*Total:* *₹${rupees(total)}*`;
       const msg = [
         "✅ *Order placed!*",
-        lineTotal,
+        `*Total:* *₹${rupees(total)}*`,
         `*Method:* *${paymentMethod || '—'}*`,
         "",
         `You can open the shop anytime: ${process.env.WEBAPP_URL || 'https://telegram-mini-mart.vercel.app/'}`,
         "Type /myorders to view your recent orders."
       ].join("\n");
-      // uses the helper you added earlier
       await tgSendMd(tgUser.id, msg);
     }
 
@@ -674,39 +660,6 @@ app.post("/order", async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-    // ---- Backend channel notification (reliable) ----
-    notifyChannelOrder({
-      id: orderId,
-      name: form?.name || prof?.name || "",
-      phone: form?.phone || prof?.phone || "",
-      address: form?.address || prof?.address || "",
-      slot: form?.slot || prof?.delivery_slot || "",
-      total,
-      payment_method: paymentMethod,
-    });
-
-    // Optional: forward a base64 "photo" (best-effort only)
-    // If you later want this, implement a multipart uploader. For now we skip to avoid failures.
-
-    if (paymentMethod === "COD")
-      return res.json({ ok: true, orderId, total, method: "COD" });
-
-    if (paymentMethod === "UPI") {
-      const link = buildUpiLink({
-        pa: process.env.UPI_PAYEE || "yourupi@okbank",
-        pn: process.env.UPI_NAME || "South Asia Mart",
-        am: rupees(total),
-        tn: `Order ${orderId}`,
-      });
-      return res.json({ ok: true, orderId, total, method: "UPI", upi: { link } });
-    }
-
-    return res.status(400).json({ ok: false, error: "UNSUPPORTED_METHOD" });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
