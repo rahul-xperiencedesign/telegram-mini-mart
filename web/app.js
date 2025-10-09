@@ -7,16 +7,9 @@ const state = {
   products: [],
   categories: [],
   activeCategory: "All",
-  // per-card temp qty (not in cart until "Add to cart")
-  tempQty: new Map(),           // id -> number
-  // real cart
   cart: new Map(),              // id -> { id,title,price,qty,ageRestricted,image }
-  // age-gate
   ageAck: false,
-  // payment capability
   payments: { codAllowed:true, upiAllowed:false, onlineAllowed:false },
-  // prefill + photo
-  profile: null,
   photoBase64: null
 };
 
@@ -90,7 +83,7 @@ function renderTabs(){
   }
 }
 
-// ===== Grid (cards) =====
+// ===== Grid =====
 function filtered(){
   if (state.activeCategory==="All") return state.products;
   return state.products.filter(p => p.category === state.activeCategory);
@@ -121,51 +114,34 @@ function renderGrid(){
     const minus = document.createElement("button");
     minus.className = "qbtn"; minus.textContent = "−";
     minus.onclick = () => {
-      const cur = state.tempQty.get(p.id) || 0;
-      const next = Math.max(0, cur-1);
-      state.tempQty.set(p.id, next);
-      qtydisp.textContent = next;
-      addbtn.disabled = next===0;
+      const cur = state.cart.get(p.id);
+      if (!cur) return;            // nothing to remove
+      cur.qty = Math.max(0, cur.qty-1);
+      if (cur.qty===0) state.cart.delete(p.id);
+      renderGrid(); updateBadge();
     };
 
     const qtydisp = document.createElement("div");
+    const currentQty = state.cart.get(p.id)?.qty || 0;
     qtydisp.className = "qtydisp";
-    qtydisp.textContent = state.tempQty.get(p.id) || 0;
+    qtydisp.textContent = currentQty;
 
     const plus = document.createElement("button");
     plus.className = "qbtn"; plus.textContent = "+";
     plus.onclick = () => {
-      const cur = state.tempQty.get(p.id) || 0;
-      const next = cur+1;
-      state.tempQty.set(p.id, next);
-      qtydisp.textContent = next;
-      addbtn.disabled = next===0;
-    };
-
-    const addbtn = document.createElement("button");
-    addbtn.className = "addbtn";
-    addbtn.textContent = "Add to cart";
-    addbtn.disabled = (state.tempQty.get(p.id) || 0) === 0;
-    addbtn.onclick = () => {
-      const qty = state.tempQty.get(p.id) || 0;
-      if (!qty) return;
       const cur = state.cart.get(p.id) || { id:p.id, title:p.title, price:p.price, qty:0, ageRestricted:!!p.age_restricted, image:p.image||"" };
-      cur.qty += qty;
+      cur.qty += 1;
       state.cart.set(p.id, cur);
-      // reset temp qty on card
-      state.tempQty.set(p.id, 0);
-      qtydisp.textContent = "0";
-      addbtn.disabled = true;
-      updateBadge();
+      renderGrid(); updateBadge();
     };
 
-    controls.append(minus, qtydisp, plus, addbtn);
+    controls.append(minus, qtydisp, plus);
     card.append(img, title, price, controls);
     el.grid.appendChild(card);
   }
 }
 
-// ===== Badge / FAB visibility =====
+// ===== Badge / FAB =====
 function updateBadge(){
   const n = [...state.cart.values()].reduce((s,i)=>s+i.qty,0);
   el.badge.textContent = n;
@@ -213,7 +189,7 @@ function renderCart(){
   refreshTotalsAndPayments();
 }
 
-// ===== Payment capability + totals =====
+// ===== Totals / payment options =====
 async function refreshTotalsAndPayments(){
   const items = [...state.cart.values()].map(x => ({ id:x.id, qty:x.qty }));
   const r = await post("/cart/price", { items });
@@ -241,7 +217,7 @@ el.photoInput.addEventListener("change", async (e) => {
   if (!file){ state.photoBase64 = null; return; }
   const b64 = await fileToDataURL(file);
   state.photoBase64 = b64;
-  // small thumbnail
+  // thumbnail
   const img = new Image();
   img.onload = () => {
     const c = el.photoPreview, max = 240;
@@ -296,7 +272,7 @@ async function place(method){
   }
 }
 
-// ===== Prefill (optional) =====
+// ===== Prefill =====
 async function prefill(){
   try {
     const r = await post("/me", { initData: tg?.initData || "" });
