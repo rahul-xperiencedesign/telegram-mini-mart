@@ -180,22 +180,38 @@ bot.command('postshop', async (ctx) => {
   }
 });
 
-/* ───────────────── Two-way support relay ─────────────────────────
+/* ---------------- Two-way support relay (hardened) ----------------
    - User sends text/photo → forward to SUPPORT_CHAT_ID with a Reply button
-   - Admin taps Reply button or replies to the header → bot sends message back
+   - Agent taps Reply → we put the agent into "reply mode" to that user (2 min)
+   - Agent's next message in the support group goes back to that user
 ------------------------------------------------------------------- */
 
-// 1) Relay messages from **user DM** to the support group
+import { Markup } from 'telegraf';
+
+// Keep a per-agent reply target for 2 minutes
+const replyMap = new Map(); // agentId -> { userId, until }
+
+// Clean up expired entries every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of replyMap.entries()) {
+    if (!v || v.until < now) replyMap.delete(k);
+  }
+}, 60_000);
+
+// 1) Relay messages from users (DMs) to the support group
 bot.on(
   ['text', 'photo', 'document', 'voice', 'video', 'video_note', 'sticker', 'location', 'contact'],
   async (ctx, next) => {
     try {
-      // only relay private chats (users)
+      // Only relay private chat messages from users to the support group
       if (ctx.chat?.type !== 'private') return next && next();
       if (!SUPPORT_CHAT_ID) return next && next();
 
       const u = ctx.from || {};
-      const title = `👤 ${u.first_name || ''} ${u.last_name || ''} ${u.username ? `(@${u.username})` : ''}`.trim();
+      const title =
+        `👤 ${[u.first_name, u.last_name].filter(Boolean).join(' ')}` +
+        (u.username ? ` (@${u.username})` : '');
       const header = `From: *${title}*\nID: \`${u.id}\``;
 
       const replyBtn = Markup.inlineKeyboard([
@@ -204,13 +220,24 @@ bot.on(
 
       if (ctx.message.photo) {
         const fileId = ctx.message.photo.slice(-1)[0].file_id;
-        await ctx.telegram.sendPhoto(SUPPORT_CHAT_ID, fileId, { caption: header, parse_mode: 'Markdown', ...replyBtn });
+        await ctx.telegram.sendPhoto(SUPPORT_CHAT_ID, fileId, {
+          caption: header + (ctx.message.caption ? `\n\n${ctx.message.caption}` : ''),
+          parse_mode: 'Markdown',
+          ...replyBtn
+        });
       } else if (ctx.message.text) {
-        await ctx.telegram.sendMessage(SUPPORT_CHAT_ID, `${header}\n\n${ctx.message.text}`, { parse_mode: 'Markdown', ...replyBtn });
+        await ctx.telegram.sendMessage(
+          SUPPORT_CHAT_ID,
+          `${header}\n\n${ctx.message.text}`,
+          { parse_mode: 'Markdown', ...replyBtn }
+        );
       } else {
-        // fallback forward and append header
+        // fallback: forward + attach header
         await ctx.forwardMessage(SUPPORT_CHAT_ID);
-        await ctx.telegram.sendMessage(SUPPORT_CHAT_ID, header, { parse_mode: 'Markdown', ...replyBtn });
+        await ctx.telegram.sendMessage(SUPPORT_CHAT_ID, header, {
+          parse_mode: 'Markdown',
+          ...replyBtn
+        });
       }
     } catch (e) {
       console.warn('relay -> support failed:', e?.message || e);
@@ -218,49 +245,65 @@ bot.on(
   }
 );
 
-// 2) Admin taps “Reply” button in the support group → we enter reply mode
+// 2) Agent taps “Reply” in the support group → store routing for that agent
 bot.action(/reply:(\d+)/, async (ctx) => {
   try {
-    if (ctx.chat?.id?.toString() !== SUPPORT_CHAT_ID) return ctx.answerCbQuery('Not here');
+    if (ctx.chat?.id?.toString() !== SUPPORT_CHAT_ID) return ctx.answerCbQuery('Use in support group');
     const userId = ctx.match[1];
-    ctx.session = ctx.session || {};
-    ctx.session.replyTo = userId;  // store target user for the next message
+    const agentId = ctx.from?.id?.toString();
+    if (!agentId) return ctx.answerCbQuery('Missing agent id');
+
+    replyMap.set(agentId, { userId, until: Date.now() + 2 * 60 * 1000 }); // 2 minutes
     await ctx.answerCbQuery();
-    await ctx.reply(`Replying to user ID ${userId}. Send your message now (text/photo).`);
+    await ctx.reply(`Replying to user ID ${userId}. Send your message now (text/photo) within 2 minutes.`);
   } catch (e) {
     console.warn('reply action error:', e?.message || e);
   }
 });
 
-// 3) Any message in the support group while in reply mode (or replying to the header) → DM to user
+// 3) Any message in the support group:
+//    - if it's a reply to a bot header that contains "ID: <number>", use that
+//    - else if the agent is in replyMap, use that
 bot.on(['text', 'photo'], async (ctx, next) => {
   try {
     if (ctx.chat?.id?.toString() !== SUPPORT_CHAT_ID) return next && next();
 
-    let userId = ctx.session?.replyTo;
+    let targetUserId = null;
 
-    // also support "replying to the header message" flow
-    if (!userId && ctx.message?.reply_to_message?.text) {
-      const m = ctx.message.reply_to_message.text.match(/ID:\s*`?(\d+)`?/);
-      if (m) userId = m[1];
+    // A) Check if it's a reply to our header (contains "ID: <number>")
+    const repliedText = ctx.message?.reply_to_message?.text || ctx.message?.reply_to_message?.caption;
+    if (repliedText) {
+      const m = repliedText.match(/ID:\s*`?(\d+)`?/);
+      if (m) targetUserId = m[1];
     }
 
-    if (!userId) return next && next();
+    // B) Otherwise, check agent replyMap
+    if (!targetUserId) {
+      const agentId = ctx.from?.id?.toString();
+      const entry = replyMap.get(agentId);
+      if (entry && entry.until > Date.now()) targetUserId = entry.userId;
+    }
 
+    if (!targetUserId) return next && next();
+
+    // Send back to user
     if (ctx.message.photo) {
       const fileId = ctx.message.photo.slice(-1)[0].file_id;
-      await ctx.telegram.sendPhoto(userId, fileId, { caption: ctx.message.caption || '' });
+      await ctx.telegram.sendPhoto(targetUserId, fileId, {
+        caption: ctx.message.caption || ''
+      });
     } else if (ctx.message.text) {
-      await ctx.telegram.sendMessage(userId, ctx.message.text);
+      await ctx.telegram.sendMessage(targetUserId, ctx.message.text);
     }
 
-    // clear one-shot reply state
-    ctx.session.replyTo = null;
+    // Clear one-shot mapping for the agent
+    const agentId = ctx.from?.id?.toString();
+    if (agentId) replyMap.delete(agentId);
+
   } catch (e) {
-    console.warn('support -> user send failed:', e?.response?.description || e.message);
+    console.warn('support -> user send failed:', e?.message || e);
   }
 });
-
 /* ───────────────── Errors & Launch ─────────────────────────────── */
 bot.catch((err, ctx) => {
   console.error('Bot error for', ctx.updateType, err);
