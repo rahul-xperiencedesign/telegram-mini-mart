@@ -22,7 +22,7 @@
     <section id="grid" class="grid"></section>
   </main>
 
-  <!-- Age Gate (single time) -->
+  <!-- Age Gate -->
   <div id="ageGate" class="modal hidden">
     <div class="modal-card">
       <h3>Age Verification</h3>
@@ -41,32 +41,33 @@
 
     <div id="cartList" class="cartlist"></div>
 
-    <!-- Delivery details (optional) -->
+    <!-- Delivery details -->
     <section class="card">
-      <h3>Delivery Details (optional)</h3>
+      <h3>Delivery Details <span class="muted">(optional)</span></h3>
 
-      <div class="row"><input id="name" placeholder="Full Name (optional)"/></div>
-      <div class="row"><input id="phone" placeholder="Phone (optional)"/></div>
-      <div class="row"><textarea id="address" placeholder="Address (optional)"></textarea></div>
+      <label class="flabel">Full Name</label>
+      <input id="name" class="fin" placeholder="Full Name (optional)"/>
 
-      <div class="row">
-        <select id="slot">
-          <option value="">Choose delivery slot (optional)</option>
-          <option>Today 6–8 PM</option>
-          <option>Today 8–10 PM</option>
-          <option>Tomorrow 10–12 AM</option>
-        </select>
-      </div>
+      <label class="flabel">Phone</label>
+      <input id="phone" class="fin" placeholder="Phone (optional)"/>
 
-      <div class="row">
-        <label class="uplabel">Location photo (optional)</label>
-        <input id="photoInput" type="file" accept="image/*"/>
-        <canvas id="photoPreview" class="ph" width="0" height="0" aria-hidden="true"></canvas>
-      </div>
+      <label class="flabel">Address</label>
+      <textarea id="address" class="fin" placeholder="Address (optional)"></textarea>
 
-      <div class="row">
-        <textarea id="note" placeholder="Add comment (optional)…"></textarea>
-      </div>
+      <label class="flabel">Delivery slot</label>
+      <select id="slot" class="fin">
+        <option value="">Choose delivery slot (optional)</option>
+        <option>Today 6–8 PM</option>
+        <option>Today 8–10 PM</option>
+        <option>Tomorrow 10–12 AM</option>
+      </select>
+
+      <label class="flabel">Location photo <span class="muted">(optional)</span></label>
+      <input id="photoInput" class="fin" type="file" accept="image/*"/>
+      <canvas id="photoPreview" class="ph" width="0" height="0" aria-hidden="true"></canvas>
+
+      <label class="flabel">Comment</label>
+      <textarea id="note" class="fin" placeholder="Add comment (optional)…"></textarea>
     </section>
 
     <section class="card">
@@ -84,7 +85,7 @@
     </div>
   </aside>
 
-  <!-- Floating View Cart (outside the drawer only) -->
+  <!-- Floating View Cart -->
   <button id="openDrawer" class="fab">View Cart</button>
 
   <script src="./app.js"></script>
