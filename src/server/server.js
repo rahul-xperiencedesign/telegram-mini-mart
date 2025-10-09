@@ -95,6 +95,18 @@ async function tgSend(chatId, text, replyMarkup = null) {
   }).catch(() => {});
 }
 
+// ✅ Add this new helper *right below* the existing one:
+async function tgSendMd(chatId, text) {
+  if (!process.env.BOT_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+    });
+  } catch (_) {}
+}
+
 // ----- Channel notify helpers -----
 function formatOrderText({ id, name, phone, address, slot, total, payment_method }) {
   return [
@@ -541,19 +553,20 @@ app.post("/myorders", async (req, res) => {
 
 // ===== Place order (COD / UPI) =====
 app.post("/order", async (req, res) => {
-  if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
     const { initData, items = [], paymentMethod, form } = req.body || {};
     const r = verifyInitData(initData, process.env.BOT_TOKEN);
     if (!r.ok) return res.status(401).json({ ok: false, error: "INVALID_INIT_DATA" });
 
-    const ids = items.map((i) => i.id);
-    const q = await pool.query("select id,title,price,age_restricted from products where id = any($1)", [
-      ids,
-    ]);
-    const map = new Map(q.rows.map((r) => [r.id, r]));
-    let total = 0,
-      restricted = false;
+    // price + restricted check
+    const ids = items.map(i => i.id);
+    const q = await pool.query(
+      "select id,title,price,age_restricted from products where id = any($1)",
+      [ids]
+    );
+    const map = new Map(q.rows.map(r => [r.id, r]));
+    let total = 0, restricted = false;
     const detailed = items.map(({ id, qty = 1 }) => {
       const p = map.get(id);
       const price = p ? p.price : 0;
@@ -563,10 +576,11 @@ app.post("/order", async (req, res) => {
     });
 
     if (total <= 0) return res.status(400).json({ ok: false, error: "EMPTY_CART" });
-    if (paymentMethod === "UPI" && restricted)
+    if (paymentMethod === "UPI" && restricted) {
       return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
+    }
 
-    // Profile fallback
+    // profile fallback
     const tgUser = JSON.parse(
       decodeURIComponent(new URLSearchParams(initData).get("user") || "{}")
     );
@@ -574,9 +588,11 @@ app.post("/order", async (req, res) => {
       await pool.query("select * from profiles where tg_user_id=$1", [tgUser?.id || null])
     ).rows[0];
 
+    // create order
     const ins = await pool.query(
       `insert into orders(tg_user_id,name,phone,address,slot,note,total,payment_method,status,geo_lat,geo_lon)
-       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       returning id`,
       [
         tgUser?.id || null,
         form?.name || prof?.name || "",
@@ -588,17 +604,61 @@ app.post("/order", async (req, res) => {
         paymentMethod,
         "placed",
         form?.geo?.lat ?? prof?.geo_lat ?? null,
-        form?.geo?.lon ?? prof?.geo_lon ?? null,
+        form?.geo?.lon ?? prof?.geo_lon ?? null
       ]
     );
     const orderId = ins.rows[0].id;
 
+    // items
     for (const d of detailed) {
       await pool.query(
         "insert into order_items(order_id,product_id,title,price,qty) values($1,$2,$3,$4,$5)",
         [orderId, d.id, d.title, d.price, d.qty]
       );
     }
+
+    // notify the channel (admin visibility)
+    notifyChannelOrder({
+      id: orderId,
+      name: form?.name || prof?.name || "",
+      phone: form?.phone || prof?.phone || "",
+      address: form?.address || prof?.address || "",
+      slot: form?.slot || prof?.delivery_slot || "",
+      total,
+      payment_method: paymentMethod
+    });
+    if (form?.photoBase64) {
+      notifyChannelPhoto(form.photoBase64, `📍 Order #${orderId} location photo`);
+    }
+
+    // ✅ NEW: DM the customer a confirmation (non-blocking)
+    const buyerMsg =
+      `✅ *Order #${orderId} placed!*\n` +
+      `Total: *₹${rupees(total)}*\n` +
+      `Method: *${paymentMethod}*\n\n` +
+      `You can open the shop anytime: ${process.env.WEBAPP_URL || "https://telegram-mini-mart.vercel.app/"}\n` +
+      `Type /myorders to view your recent orders.`;
+    tgSendMd(tgUser?.id, buyerMsg); // fire-and-forget
+
+    // respond to webapp
+    if (paymentMethod === "COD") {
+      return res.json({ ok: true, orderId, total, method: "COD" });
+    }
+    if (paymentMethod === "UPI") {
+      const link = buildUpiLink({
+        pa: process.env.UPI_PAYEE || "yourupi@okbank",
+        pn: process.env.UPI_NAME || "South Asia Mart",
+        am: rupees(total),
+        tn: `Order ${orderId}`,
+      });
+      return res.json({ ok: true, orderId, total, method: "UPI", upi: { link } });
+    }
+    return res.status(400).json({ ok: false, error: "UNSUPPORTED_METHOD" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
 
     // ---- Backend channel notification (reliable) ----
     notifyChannelOrder({
