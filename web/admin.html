@@ -1,122 +1,192 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Admin — South Asia Mart</title>
-  <link rel="stylesheet" href="./styles.css"/>
-  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
+  <style>
+    :root{--bg:#0b1220;--panel:#111827;--muted:#9ca3af;--fg:#e5e7eb;--accent:#60a5fa}
+    *{box-sizing:border-box} body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto;background:var(--bg);color:var(--fg)}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #1f2937;position:sticky;top:0;background:#0b1220}
+    main{padding:18px;display:grid;gap:18px;grid-template-columns:1.2fr .8fr}
+    .card{background:var(--panel);border:1px solid #1f2937;border-radius:14px;padding:16px}
+    h3{margin:0 0 12px}
+    table{width:100%;border-collapse:collapse;font-size:.95rem}
+    th,td{padding:8px 10px;border-top:1px solid #1f2937;vertical-align:top}
+    select, input, button{padding:8px 10px;border-radius:10px;border:1px solid #374151;background:#0f172a;color:var(--fg)}
+    button{background:#2563eb;border-color:#2563eb;font-weight:700;cursor:pointer}
+    .row{display:flex;gap:10px;align-items:center}
+    .muted{color:var(--muted)}
+    .grid2{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+    .w100{width:100%}
+  </style>
 </head>
 <body>
-  <header class="topbar admin">
-    <div class="brand">South Asia Mart — Admin</div>
-    <div class="top-actions">
-      <button id="logout" class="btn">Logout</button>
-    </div>
-  </header>
-
-  <div class="admin-shell">
-    <aside class="sidebar">
-      <button class="navlink active" data-view="dashboard">Dashboard</button>
-      <button class="navlink" data-view="products">Products</button>
-      <button class="navlink" data-view="orders">Orders</button>
-      <button class="navlink" data-view="users">Users</button>
-      <button class="navlink" data-view="settings">Settings (soon)</button>
-    </aside>
-
-    <main class="main">
-      <!-- Dashboard -->
-      <section id="view-dashboard" class="view">
-        <h2>Overview</h2>
-        <div class="cards">
-          <div class="card"><div class="kpi" id="kpi-products">0</div><div class="muted">Products</div></div>
-          <div class="card"><div class="kpi" id="kpi-revenue">₹0</div><div class="muted">Revenue (placed+paid)</div></div>
-        </div>
-        <div class="card">
-          <h3>Low Stock</h3>
-          <div id="lowstock" class="table"></div>
-        </div>
-      </section>
-
-      <!-- Products -->
-      <section id="view-products" class="view hidden">
-        <div class="toolbar">
-          <input id="pSearch" class="input" placeholder="Search title or ID"/>
-          <select id="pPageSize" class="input" style="max-width:120px">
-            <option>20</option><option>50</option><option>100</option>
-          </select>
-          <button id="pReload" class="btn">Reload</button>
-          <label class="btn">
-            Bulk Import CSV
-            <input id="csvFile" type="file" accept=".csv" style="display:none"/>
-          </label>
-        </div>
-
-        <div class="grid2">
-          <form id="productForm" class="card">
-            <h3>Add / Update Product</h3>
-            <input class="input" id="pid" placeholder="ID (e.g., RICE5)"/>
-            <input class="input" id="ptitle" placeholder="Title"/>
-            <input class="input" id="pprice" type="number" placeholder="Price (paise)"/>
-            <input class="input" id="pcat" placeholder="Category"/>
-            <input class="input" id="pimg" placeholder="Image URL (optional)"/>
-            <label><input id="prestrict" type="checkbox"/> Age Restricted</label>
-            <input class="input" id="pstock" type="number" placeholder="Stock"/>
-            <button class="btn primary" type="submit">Save</button>
-          </form>
-
-          <div class="card">
-            <h3>Catalog</h3>
-            <div id="pTable" class="table"></div>
-            <div class="pager">
-              <button id="pPrev" class="btn">Prev</button>
-              <span id="pPageInfo" class="muted"></span>
-              <button id="pNext" class="btn">Next</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Orders -->
-      <section id="view-orders" class="view hidden">
-        <div class="toolbar">
-          <select id="oStatus" class="input" style="max-width:160px">
-            <option value="">All statuses</option>
-            <option>placed</option><option>paid</option><option>shipped</option><option>delivered</option><option>cancelled</option>
-          </select>
-          <input id="oQuery" class="input" placeholder="Search name/phone/address"/>
-          <button id="oReload" class="btn">Reload</button>
-        </div>
-        <div class="card">
-          <h3>Orders</h3>
-          <div id="oTable" class="table"></div>
-          <div class="pager">
-            <button id="oPrev" class="btn">Prev</button>
-            <span id="oPageInfo" class="muted"></span>
-            <button id="oNext" class="btn">Next</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Users -->
-      <section id="view-users" class="view hidden">
-        <div class="toolbar">
-          <input id="uQuery" class="input" placeholder="Search name/phone/username"/>
-          <button id="uReload" class="btn">Reload</button>
-        </div>
-        <div class="card">
-          <h3>Users</h3>
-          <div id="uTable" class="table"></div>
-        </div>
-      </section>
-
-      <!-- Placeholder -->
-      <section id="view-settings" class="view hidden">
-        <div class="card"><h3>Settings</h3><p class="muted">Delivery slots, payment toggles — coming next.</p></div>
-      </section>
-    </main>
+<header>
+  <div class="row">
+    <strong>Admin</strong>
+    <span class="muted" id="me"></span>
   </div>
+  <div class="row">
+    <button onclick="logout()">Logout</button>
+  </div>
+</header>
 
-  <script src="./admin.js"></script>
+<main>
+  <section class="card">
+    <h3>Orders</h3>
+    <div class="row" style="margin-bottom:10px">
+      <label>Status:&nbsp;
+        <select id="fltStatus">
+          <option value="">All</option>
+          <option>placed</option><option>paid</option><option>shipped</option><option>delivered</option><option>cancelled</option>
+        </select>
+      </label>
+      <input id="fltQ" placeholder="Search name/phone/address"/>
+      <button onclick="loadOrders()">Refresh</button>
+    </div>
+    <div class="muted" id="ordersInfo"></div>
+    <table id="ordersTbl">
+      <thead><tr><th>ID</th><th>Customer</th><th>Total</th><th>Status</th><th>When</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <aside class="card">
+    <h3>Quick Stats</h3>
+    <div id="stats"></div>
+    <hr style="border-color:#1f2937;margin:14px 0"/>
+    <h3>Add / Update Product</h3>
+    <div class="grid2">
+      <input id="pid" placeholder="SKU (unique)"/>
+      <input id="ptitle" placeholder="Title"/>
+      <input id="pprice" type="number" min="0" step="1" placeholder="Price (paise)"/>
+      <input id="pcat" placeholder="Category"/>
+      <input id="pimg" class="w100" placeholder="Image URL (optional)"/>
+      <label class="row"><input id="page" type="checkbox"/> Age-restricted</label>
+      <input id="pstock" type="number" min="0" step="1" placeholder="Stock" value="999"/>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveProduct()">Save</button>
+      <button onclick="delProduct()" style="background:#ef4444;border-color:#ef4444">Delete</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+const API_BASE = "https://telegram-mini-mart.onrender.com";
+
+function token(){ return localStorage.getItem("admintoken"); }
+function mustToken(){
+  const t = token();
+  if(!t){ location.href="./admin-login.html"; throw new Error("no token"); }
+  return t;
+}
+
+async function api(path, opt={}){
+  const t = mustToken();
+  const res = await fetch(API_BASE + path, {
+    ...opt,
+    headers:{
+      "Authorization":"Bearer " + t,
+      ...(opt.headers||{})
+    }
+  });
+  if(res.status===401){ localStorage.removeItem("admintoken"); location.href="./admin-login.html"; return; }
+  return res.json();
+}
+
+async function me(){
+  const j = await api("/admin/auth/session");
+  document.getElementById("me").textContent = j?.admin?.email || "";
+}
+
+async function loadStats(){
+  const s = await api("/admin/stats");
+  const el = document.getElementById("stats");
+  if(!s?.ok){ el.textContent = "Failed to load"; return; }
+  el.innerHTML = `
+    <div class="row"><div class="muted">Products</div><div>${s.product_count}</div></div>
+    <div class="row"><div class="muted">Revenue</div><div>₹ ${(s.revenue/100).toFixed(2)}</div></div>
+    <div class="muted" style="margin-top:8px">Last 7 days</div>
+    <ul style="padding-left:18px;margin:6px 0 0">
+      ${s.last7.map(d=>`<li>${d.day}: ${d.orders} orders / ₹ ${(d.revenue/100).toFixed(2)}</li>`).join("")}
+    </ul>
+  `;
+}
+
+async function loadOrders(page=1){
+  const status = document.getElementById("fltStatus").value;
+  const q = document.getElementById("fltQ").value.trim();
+  const qs = new URLSearchParams({page, pageSize: "20"});
+  if(status) qs.set("status", status);
+  if(q) qs.set("q", q);
+  const j = await api("/admin/orders?"+qs.toString());
+  const tb = document.querySelector("#ordersTbl tbody");
+  tb.innerHTML = "";
+  if(!j?.ok){ tb.innerHTML = `<tr><td colspan="6">Failed</td></tr>`; return; }
+  document.getElementById("ordersInfo").textContent = `${j.total} orders`;
+  for(const o of j.items){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>#${o.id}</td>
+      <td>${o.name||"-"}<div class="muted">${o.phone||""}</div><div class="muted">${o.address||""}</div></td>
+      <td>₹ ${(o.total/100).toFixed(2)}</td>
+      <td>${o.status}</td>
+      <td>${new Date(o.created_at).toLocaleString()}</td>
+      <td>
+        <select id="st-${o.id}">
+          ${["placed","paid","shipped","delivered","cancelled"].map(s=>`<option ${s===o.status?"selected":""}>${s}</option>`).join("")}
+        </select>
+        <button onclick="setStatus(${o.id})" style="margin-left:6px">Update</button>
+      </td>`;
+    tb.appendChild(tr);
+  }
+}
+
+async function setStatus(id){
+  const st = document.getElementById("st-"+id).value;
+  const j = await api("/admin/orders/"+id+"/status", {
+    method:"PUT", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({status: st})
+  });
+  if(j?.ok){ loadOrders(); } else { alert("Failed: " + (j?.error||"")); }
+}
+
+async function saveProduct(){
+  const body = {
+    id: pid.value.trim(),
+    title: ptitle.value.trim(),
+    price: parseInt(pprice.value||"0",10),
+    category: pcat.value.trim(),
+    image: pimg.value.trim(),
+    age_restricted: page.checked,
+    stock: parseInt(pstock.value||"0",10)
+  };
+  if(!body.id || !body.title || !body.category){ alert("Missing required fields."); return; }
+  const j = await api("/admin/products", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(body)
+  });
+  if(j?.ok){ alert("Saved"); loadStats(); } else { alert("Failed: " + (j?.error||"")); }
+}
+
+async function delProduct(){
+  const id = pid.value.trim();
+  if(!id) return alert("Enter SKU to delete");
+  if(!confirm("Delete "+id+" ?")) return;
+  const j = await api("/admin/products/"+encodeURIComponent(id), { method:"DELETE" });
+  if(j?.ok){ alert("Deleted"); loadStats(); } else { alert("Failed: " + (j?.error||"")); }
+}
+
+function logout(){ localStorage.removeItem("admintoken"); location.href="./admin-login.html"; }
+
+(async function init(){
+  if(!token()){ location.href="./admin-login.html"; return; }
+  await me();
+  await loadStats();
+  await loadOrders();
+})();
+</script>
 </body>
 </html>
