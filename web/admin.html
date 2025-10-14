@@ -1,192 +1,107 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Admin — South Asia Mart</title>
-  <style>
-    :root{--bg:#0b1220;--panel:#111827;--muted:#9ca3af;--fg:#e5e7eb;--accent:#60a5fa}
-    *{box-sizing:border-box} body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto;background:var(--bg);color:var(--fg)}
-    header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #1f2937;position:sticky;top:0;background:#0b1220}
-    main{padding:18px;display:grid;gap:18px;grid-template-columns:1.2fr .8fr}
-    .card{background:var(--panel);border:1px solid #1f2937;border-radius:14px;padding:16px}
-    h3{margin:0 0 12px}
-    table{width:100%;border-collapse:collapse;font-size:.95rem}
-    th,td{padding:8px 10px;border-top:1px solid #1f2937;vertical-align:top}
-    select, input, button{padding:8px 10px;border-radius:10px;border:1px solid #374151;background:#0f172a;color:var(--fg)}
-    button{background:#2563eb;border-color:#2563eb;font-weight:700;cursor:pointer}
-    .row{display:flex;gap:10px;align-items:center}
-    .muted{color:var(--muted)}
-    .grid2{display:grid;gap:10px;grid-template-columns:1fr 1fr}
-    .w100{width:100%}
-  </style>
-</head>
-<body>
-<header>
-  <div class="row">
-    <strong>Admin</strong>
-    <span class="muted" id="me"></span>
-  </div>
-  <div class="row">
-    <button onclick="logout()">Logout</button>
-  </div>
-</header>
-
-<main>
-  <section class="card">
-    <h3>Orders</h3>
-    <div class="row" style="margin-bottom:10px">
-      <label>Status:&nbsp;
-        <select id="fltStatus">
-          <option value="">All</option>
-          <option>placed</option><option>paid</option><option>shipped</option><option>delivered</option><option>cancelled</option>
-        </select>
-      </label>
-      <input id="fltQ" placeholder="Search name/phone/address"/>
-      <button onclick="loadOrders()">Refresh</button>
-    </div>
-    <div class="muted" id="ordersInfo"></div>
-    <table id="ordersTbl">
-      <thead><tr><th>ID</th><th>Customer</th><th>Total</th><th>Status</th><th>When</th><th>Action</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-  <aside class="card">
-    <h3>Quick Stats</h3>
-    <div id="stats"></div>
-    <hr style="border-color:#1f2937;margin:14px 0"/>
-    <h3>Add / Update Product</h3>
-    <div class="grid2">
-      <input id="pid" placeholder="SKU (unique)"/>
-      <input id="ptitle" placeholder="Title"/>
-      <input id="pprice" type="number" min="0" step="1" placeholder="Price (paise)"/>
-      <input id="pcat" placeholder="Category"/>
-      <input id="pimg" class="w100" placeholder="Image URL (optional)"/>
-      <label class="row"><input id="page" type="checkbox"/> Age-restricted</label>
-      <input id="pstock" type="number" min="0" step="1" placeholder="Stock" value="999"/>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button onclick="saveProduct()">Save</button>
-      <button onclick="delProduct()" style="background:#ef4444;border-color:#ef4444">Delete</button>
-    </div>
-  </aside>
-</main>
-
 <script>
-const API_BASE = "https://telegram-mini-mart.onrender.com";
+/** === Admin API bootstrap (Render + JWT) ===
+ * Paste this block at the TOP of admin.html, before any other scripts.
+ */
+(function () {
+  // 1) Your Render backend (no trailing slash)
+  window.API_BASE = 'https://telegram-mini-mart.onrender.com';
 
-function token(){ return localStorage.getItem("admintoken"); }
-function mustToken(){
-  const t = token();
-  if(!t){ location.href="./admin-login.html"; throw new Error("no token"); }
-  return t;
-}
+  // Token storage key
+  const TOKEN_KEY = 'adminToken';
 
-async function api(path, opt={}){
-  const t = mustToken();
-  const res = await fetch(API_BASE + path, {
-    ...opt,
-    headers:{
-      "Authorization":"Bearer " + t,
-      ...(opt.headers||{})
+  // 2) A small wrapper around fetch:
+  //    - Prefix relative URLs with API_BASE
+  //    - Attach Authorization: Bearer <token> if present
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    let url = input;
+    if (typeof input === 'string' && input.startsWith('/')) {
+      url = API_BASE + input;
     }
-  });
-  if(res.status===401){ localStorage.removeItem("admintoken"); location.href="./admin-login.html"; return; }
-  return res.json();
-}
-
-async function me(){
-  const j = await api("/admin/auth/session");
-  document.getElementById("me").textContent = j?.admin?.email || "";
-}
-
-async function loadStats(){
-  const s = await api("/admin/stats");
-  const el = document.getElementById("stats");
-  if(!s?.ok){ el.textContent = "Failed to load"; return; }
-  el.innerHTML = `
-    <div class="row"><div class="muted">Products</div><div>${s.product_count}</div></div>
-    <div class="row"><div class="muted">Revenue</div><div>₹ ${(s.revenue/100).toFixed(2)}</div></div>
-    <div class="muted" style="margin-top:8px">Last 7 days</div>
-    <ul style="padding-left:18px;margin:6px 0 0">
-      ${s.last7.map(d=>`<li>${d.day}: ${d.orders} orders / ₹ ${(d.revenue/100).toFixed(2)}</li>`).join("")}
-    </ul>
-  `;
-}
-
-async function loadOrders(page=1){
-  const status = document.getElementById("fltStatus").value;
-  const q = document.getElementById("fltQ").value.trim();
-  const qs = new URLSearchParams({page, pageSize: "20"});
-  if(status) qs.set("status", status);
-  if(q) qs.set("q", q);
-  const j = await api("/admin/orders?"+qs.toString());
-  const tb = document.querySelector("#ordersTbl tbody");
-  tb.innerHTML = "";
-  if(!j?.ok){ tb.innerHTML = `<tr><td colspan="6">Failed</td></tr>`; return; }
-  document.getElementById("ordersInfo").textContent = `${j.total} orders`;
-  for(const o of j.items){
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>#${o.id}</td>
-      <td>${o.name||"-"}<div class="muted">${o.phone||""}</div><div class="muted">${o.address||""}</div></td>
-      <td>₹ ${(o.total/100).toFixed(2)}</td>
-      <td>${o.status}</td>
-      <td>${new Date(o.created_at).toLocaleString()}</td>
-      <td>
-        <select id="st-${o.id}">
-          ${["placed","paid","shipped","delivered","cancelled"].map(s=>`<option ${s===o.status?"selected":""}>${s}</option>`).join("")}
-        </select>
-        <button onclick="setStatus(${o.id})" style="margin-left:6px">Update</button>
-      </td>`;
-    tb.appendChild(tr);
-  }
-}
-
-async function setStatus(id){
-  const st = document.getElementById("st-"+id).value;
-  const j = await api("/admin/orders/"+id+"/status", {
-    method:"PUT", headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({status: st})
-  });
-  if(j?.ok){ loadOrders(); } else { alert("Failed: " + (j?.error||"")); }
-}
-
-async function saveProduct(){
-  const body = {
-    id: pid.value.trim(),
-    title: ptitle.value.trim(),
-    price: parseInt(pprice.value||"0",10),
-    category: pcat.value.trim(),
-    image: pimg.value.trim(),
-    age_restricted: page.checked,
-    stock: parseInt(pstock.value||"0",10)
+    const headers = new Headers(init.headers || {});
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', 'Bearer ' + token);
+    }
+    return _origFetch(url, { ...init, headers });
   };
-  if(!body.id || !body.title || !body.category){ alert("Missing required fields."); return; }
-  const j = await api("/admin/products", {
-    method:"POST", headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify(body)
+
+  // 3) Session helpers
+  async function verifySession() {
+    try {
+      const r = await fetch('/admin/auth/session', { method: 'GET' });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function doLoginPrompt() {
+    const email = prompt('Admin email (Render env ADMIN_EMAIL):', '');
+    const password = prompt('Admin password (Render env ADMIN_PASSWORD):', '');
+    if (!email || !password) throw new Error('Login cancelled');
+
+    const resp = await fetch('/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+
+    let json = {};
+    try { json = await resp.json(); } catch { /* ignore */ }
+
+    if (!resp.ok || !json.ok || !json.token) {
+      console.warn('Login failed:', json);
+      throw new Error(json.error || 'Login failed');
+    }
+    localStorage.setItem(TOKEN_KEY, json.token);
+
+    // Double-check token works
+    const ok = await verifySession();
+    if (!ok) {
+      localStorage.removeItem(TOKEN_KEY);
+      throw new Error('Token verify failed after login');
+    }
+  }
+
+  async function ensureSession() {
+    // If a token exists, try to verify it; otherwise, prompt login
+    const hasToken = !!localStorage.getItem(TOKEN_KEY);
+    if (hasToken) {
+      const ok = await verifySession();
+      if (ok) return;
+      // token invalid/expired -> clear and fallthrough to prompt
+      localStorage.removeItem(TOKEN_KEY);
+    }
+    await doLoginPrompt().catch((err) => {
+      console.warn(err);
+      alert('Admin login required to use this page.');
+      throw err;
+    });
+  }
+
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    location.reload();
+  }
+
+  // 4) Expose helpers (optional, handy in DevTools)
+  window.ADMIN = {
+    login: () => doLoginPrompt().then(() => location.reload()),
+    logout,
+    apiBase: () => window.API_BASE
+  };
+
+  // 5) Bind a generic logout click (if a button exists)
+  document.addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-logout], #logout, .logout-button');
+    if (!el) return;
+    ev.preventDefault();
+    logout();
   });
-  if(j?.ok){ alert("Saved"); loadStats(); } else { alert("Failed: " + (j?.error||"")); }
-}
 
-async function delProduct(){
-  const id = pid.value.trim();
-  if(!id) return alert("Enter SKU to delete");
-  if(!confirm("Delete "+id+" ?")) return;
-  const j = await api("/admin/products/"+encodeURIComponent(id), { method:"DELETE" });
-  if(j?.ok){ alert("Deleted"); loadStats(); } else { alert("Failed: " + (j?.error||"")); }
-}
-
-function logout(){ localStorage.removeItem("admintoken"); location.href="./admin-login.html"; }
-
-(async function init(){
-  if(!token()){ location.href="./admin-login.html"; return; }
-  await me();
-  await loadStats();
-  await loadOrders();
+  // 6) Start: make sure we have a valid session before the page’s own scripts run
+  //    If you prefer an explicit "Log in" button, comment the line below
+  ensureSession().catch(() => {/* stop page init if not logged in */});
 })();
 </script>
-</body>
-</html>
