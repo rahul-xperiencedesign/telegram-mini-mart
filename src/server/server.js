@@ -5,23 +5,11 @@ import crypto from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
 
-// --- NEW: admin + upload libs ---
+// Admin + uploads
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import formidable from "formidable";
 import { v2 as cloudinary } from "cloudinary";
-
-// --- TEMP: JWT diagnostics helper ---
-function readBearer(req) {
-  const h = req.headers?.authorization || req.headers?.Authorization || "";
-  if (!h) return { ok: false, reason: "NO_AUTH_HEADER" };
-  const parts = h.split(/\s+/);
-  if (parts.length < 2 || parts[0].toLowerCase() !== "bearer")
-    return { ok: false, reason: "BAD_SCHEME", raw: h };
-  const token = parts.slice(1).join(" ").trim();
-  if (!token) return { ok: false, reason: "EMPTY_TOKEN" };
-  return { ok: true, token };
-}
 
 // Node >=18 has global fetch. If your logs ever show "fetch is not defined",
 // add:  import fetch from "node-fetch";
@@ -35,7 +23,7 @@ app.use(
   })
 );
 
-// --- NEW: Cloudinary config ONLY if set ---
+// Cloudinary (optional)
 if (process.env.CLOUDINARY_URL) {
   cloudinary.config({ secure: true });
 }
@@ -130,7 +118,6 @@ async function tgSendMd(chatId, text) {
   } catch (_) {}
 }
 
-// ----- Channel notify helpers -----
 function formatOrderText({ id, name, phone, address, slot, total, payment_method }) {
   return [
     `🧾 *New Order #${id}*`,
@@ -161,21 +148,23 @@ async function notifyChannelOrder(row) {
   }
 }
 
-// ===== Admin JWT helpers (NEW) =====
+// ===== Admin JWT helpers =====
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const SESSION_TTL_DAYS = parseInt(process.env.SESSION_TTL_DAYS || "7", 10);
 
 function signAdminJwt(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: `${SESSION_TTL_DAYS}d` });
 }
+
 function readBearer(req) {
-  const h = req.headers.authorization || "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
-}
-function tryVerifyJwt(token) {
-  try { return jwt.verify(token, JWT_SECRET); }
-  catch { return null; }
+  const h = req.headers?.authorization || req.headers?.Authorization || "";
+  if (!h) return { ok: false, reason: "NO_AUTH_HEADER" };
+  const parts = h.split(/\s+/);
+  if (parts.length < 2 || parts[0].toLowerCase() !== "bearer")
+    return { ok: false, reason: "BAD_SCHEME", raw: h };
+  const token = parts.slice(1).join(" ").trim();
+  if (!token) return { ok: false, reason: "EMPTY_TOKEN" };
+  return { ok: true, token };
 }
 
 // ===== Schema & seed =====
@@ -228,7 +217,6 @@ create table if not exists profiles (
 );
 `;
 
-// --- NEW: separate admin schema (keeps your original constant intact) ---
 const SCHEMA_ADMIN_SQL = `
 create table if not exists admin_users (
   id bigserial primary key,
@@ -256,7 +244,7 @@ on conflict (id) do nothing;
 // ===== Health =====
 app.get("/", (_req, res) => res.json({ ok: true, service: "backend-alive" }));
 
-// ===== Verify test =====
+// ===== Verify test for Telegram initData =====
 app.post("/verify", (req, res) => {
   const { initData } = req.body || {};
   const r = verifyInitData(initData, process.env.BOT_TOKEN);
@@ -265,28 +253,27 @@ app.post("/verify", (req, res) => {
   res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
 });
 
-// ===== Admin auth middleware (REPLACED) =====
-// Backward compatible: still accepts x-admin-key == ADMIN_PASSWORD
+// ===== Admin auth middleware (legacy key OR JWT) =====
 async function requireAdmin(req, res, next) {
-  // 1) old header path
+  // Legacy header path (kept for convenience)
   const legacyKey = req.headers["x-admin-key"];
-  if (legacyKey && legacyKey === process.env.ADMIN_PASSWORD) return next();
+  if (legacyKey && legacyKey === (process.env.ADMIN_PASSWORD || "").trim()) return next();
 
-  // 2) JWT path
-  const token = readBearer(req);
-  if (!token) return res.status(401).json({ ok: false, error: "NO_TOKEN" });
-
-  const data = tryVerifyJwt(token);
-  if (!data?.aid) return res.status(401).json({ ok: false, error: "BAD_TOKEN" });
-
+  // JWT path
+  const rb = readBearer(req);
+  if (!rb.ok) return res.status(401).json({ ok: false, error: rb.reason, raw: rb.raw });
   try {
+    const data = jwt.verify(rb.token, JWT_SECRET);
+    if (!data?.aid) return res.status(401).json({ ok: false, error: "BAD_TOKEN" });
+
     const r = await pool.query("select id,email,name,active from admin_users where id=$1", [data.aid]);
     if (!r.rowCount || !r.rows[0].active) return res.status(403).json({ ok:false, error:"ADMIN_DISABLED" });
+
     req.admin = r.rows[0];
     next();
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok:false, error:"AUTH_DB_ERROR" });
+    console.warn("JWT verify failed:", e?.message || e);
+    return res.status(401).json({ ok:false, error:"BAD_TOKEN" });
   }
 }
 
@@ -297,9 +284,11 @@ app.post("/admin/init", async (_req, res) => {
     await pool.query(SCHEMA_SQL);
     await pool.query(SCHEMA_ADMIN_SQL);
 
-    // Optional seed default admin from env the FIRST time
+    // Seed default admin from env the FIRST time
     if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
-      const exists = await pool.query("select 1 from admin_users where email=$1", [process.env.ADMIN_EMAIL.toLowerCase()]);
+      const exists = await pool.query("select 1 from admin_users where email=$1", [
+        process.env.ADMIN_EMAIL.toLowerCase(),
+      ]);
       if (!exists.rowCount) {
         const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
         await pool.query(
@@ -323,66 +312,9 @@ app.post("/admin/seed", requireAdmin, async (_req, res) => {
   res.json({ ok: true });
 });
 
-// ===== Admin: auth (email+password -> JWT), plus admin-key exchange =====
+// ===== Admin: auth =====
 
-// POST /admin/auth/login  (email+password -> JWT)
-// Accepts ADMIN_EMAIL='*' (wildcard) or case-insensitive exact match
-app.post("/admin/auth/login", async (req, res) => {
-  try {
-    const { email = "", password = "" } = req.body || {};
-    const cfgEmail = (process.env.ADMIN_EMAIL || "").trim();
-    const cfgPass = (process.env.ADMIN_PASSWORD || "").trim();
-    const jwtSecret = process.env.JWT_SECRET || "dev-secret";
-
-    // password must match exactly
-    const passOk = password === cfgPass;
-
-    // email: wildcard or case-insensitive exact match; if ADMIN_EMAIL unset, skip email check
-    const emailOk =
-      !cfgEmail ||
-      cfgEmail === "*" ||
-      email.trim().toLowerCase() === cfgEmail.toLowerCase();
-
-    if (!passOk || !emailOk) {
-      return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
-    }
-
-    const token = jwt.sign(
-      { sub: "admin", email: email.trim(), role: "admin" },
-      jwtSecret,
-      { expiresIn: "7d" }
-    );
-    res.json({ ok: true, token });
-  } catch (e) {
-    console.error("ADMIN_LOGIN_FAILED:", e);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-// POST /admin/auth/exchange  (x-admin-key == ADMIN_PASSWORD -> JWT)
-app.post("/admin/auth/exchange", async (req, res) => {
-  try {
-    const key = req.headers["x-admin-key"];
-    const cfgPass = (process.env.ADMIN_PASSWORD || "").trim();
-    const jwtSecret = process.env.JWT_SECRET || "dev-secret";
-
-    if (!key || key !== cfgPass) {
-      return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-    }
-
-    const token = jwt.sign(
-      { sub: "admin", email: process.env.ADMIN_EMAIL || "admin", role: "admin" },
-      jwtSecret,
-      { expiresIn: "7d" }
-    );
-    res.json({ ok: true, token });
-  } catch (e) {
-    console.error("ADMIN_EXCHANGE_FAILED:", e);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-// ===== Admin auth routes (NEW) =====
+// Email+password (DB-backed) -> JWT
 app.post("/admin/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -408,32 +340,40 @@ app.post("/admin/auth/login", async (req, res) => {
   }
 });
 
-app.get("/admin/auth/session", requireAdmin, async (req, res) => {
-  res.json({ ok:true, admin: req.admin || null });
+// Legacy exchange: x-admin-key (ADMIN_PASSWORD) -> JWT
+app.post("/admin/auth/exchange", async (req, res) => {
+  try {
+    const key = req.headers["x-admin-key"]?.trim();
+    const cfgPass = (process.env.ADMIN_PASSWORD || "").trim();
+    if (!key || key !== cfgPass) {
+      return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+    }
+    const token = signAdminJwt({ aid: -1, role: "owner-legacy" }); // aid -1 for legacy
+    res.json({ ok: true, token });
+  } catch (e) {
+    console.error("ADMIN_EXCHANGE_FAILED:", e);
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
 });
 
-// --- TEMP: JWT verify endpoint (for debugging) ---
-import jwt from "jsonwebtoken"; // ensure you have a single jwt import once in the file
-
+// Debug: verify a JWT
 app.get("/admin/auth/verify", (req, res) => {
   try {
-    const r = readBearer(req);
-    if (!r.ok) return res.status(401).json({ ok: false, error: r.reason, raw: r.raw });
-
+    const rb = readBearer(req);
+    if (!rb.ok) return res.status(401).json({ ok: false, error: rb.reason, raw: rb.raw });
     try {
-      const payload = jwt.verify(r.token, process.env.JWT_SECRET);
+      const payload = jwt.verify(rb.token, JWT_SECRET);
       return res.json({ ok: true, payload });
     } catch (e) {
-      // Log the exact reason on the server; send a safe message to client
       console.warn("JWT verify failed:", e?.message || e);
       return res.status(401).json({ ok: false, error: "BAD_TOKEN", message: e?.message || String(e) });
     }
-  } catch (e) {
+  } catch {
     return res.status(500).json({ ok: false, error: "VERIFY_ERROR" });
   }
 });
 
-// ===== Admin users CRUD (NEW) =====
+// ===== Admin users CRUD =====
 app.get("/admin/users", requireAdmin, async (_req, res) => {
   try {
     const r = await pool.query(
@@ -490,7 +430,6 @@ app.put("/admin/users/:id", requireAdmin, async (req, res) => {
 app.delete("/admin/users/:id", requireAdmin, async (req, res) => {
   try {
     const id = +req.params.id;
-    // soft-disable instead of hard delete
     await pool.query("update admin_users set active=false where id=$1", [id]);
     res.json({ ok:true });
   } catch (e) {
@@ -538,6 +477,7 @@ app.get("/admin/products", requireAdmin, async (_req, res) => {
   const q = await pool.query("select * from products order by title");
   res.json({ ok: true, items: q.rows });
 });
+
 app.post("/admin/products", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   const { id, title, price, category, image = "", age_restricted = false, stock = 999 } =
@@ -551,11 +491,13 @@ app.post("/admin/products", requireAdmin, async (req, res) => {
   );
   res.json({ ok: true });
 });
+
 app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   await pool.query("delete from products where id=$1", [req.params.id]);
   res.json({ ok: true });
 });
+
 app.post("/admin/products/bulk", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   const { items = [] } = req.body || {};
@@ -613,6 +555,7 @@ app.get("/admin/stats", requireAdmin, async (_req, res) => {
     res.status(500).json({ ok: false, error: "STATS_FAILED" });
   }
 });
+
 app.get("/admin/orders", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   try {
@@ -653,6 +596,7 @@ app.get("/admin/orders", requireAdmin, async (req, res) => {
     res.status(500).json({ ok: false, error: "ORDERS_FAILED" });
   }
 });
+
 app.put("/admin/orders/:id/status", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   const allowed = ["placed", "paid", "shipped", "delivered", "cancelled"];
@@ -662,6 +606,7 @@ app.put("/admin/orders/:id/status", requireAdmin, async (req, res) => {
   await pool.query("update orders set status=$1 where id=$2", [status, req.params.id]);
   res.json({ ok: true });
 });
+
 app.get("/admin/profiles", requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   const { page = "1", pageSize = "50", q } = req.query;
@@ -692,6 +637,7 @@ app.get("/categories", async (_req, res) => {
   const q = await pool.query("select distinct category from products order by category");
   res.json({ ok: true, categories: q.rows.map((r) => r.category) });
 });
+
 app.get("/products", async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   const cat = req.query.category;
@@ -881,7 +827,6 @@ app.post("/order", async (req, res) => {
       return res.status(400).json({ ok: false, error: "RESTRICTED_UPI_BLOCKED" });
     }
 
-    // Profile fallback
     const tgUser = JSON.parse(
       decodeURIComponent(new URLSearchParams(initData).get("user") || "{}")
     );
@@ -918,7 +863,6 @@ app.post("/order", async (req, res) => {
       );
     }
 
-    // Channel notification (best-effort)
     notifyChannelOrder({
       id: orderId,
       name: form?.name || prof?.name || "",
@@ -929,7 +873,6 @@ app.post("/order", async (req, res) => {
       payment_method: paymentMethod
     });
 
-    // DM confirmation to the buyer
     if (tgUser?.id) {
       const msg = [
         "✅ *Order placed!*",
