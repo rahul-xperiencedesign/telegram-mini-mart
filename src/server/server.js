@@ -5,6 +5,12 @@ import crypto from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
 
+// --- NEW: admin + upload libs ---
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import formidable from "formidable";
+import { v2 as cloudinary } from "cloudinary";
+
 // Node >=18 has global fetch. If your logs ever show "fetch is not defined",
 // add:  import fetch from "node-fetch";
 
@@ -16,6 +22,11 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE"],
   })
 );
+
+// --- NEW: Cloudinary config ONLY if set ---
+if (process.env.CLOUDINARY_URL) {
+  cloudinary.config({ secure: true });
+}
 
 // ===== DB pool (single instance) =====
 let pool = null;
@@ -42,6 +53,8 @@ app.get("/__envcheck", (_req, res) => {
     db: info,
     hasBOT: !!process.env.BOT_TOKEN,
     channel: process.env.CHANNEL_ID || null,
+    hasCloudinary: !!process.env.CLOUDINARY_URL,
+    hasJwtSecret: !!process.env.JWT_SECRET,
   });
 });
 
@@ -136,6 +149,23 @@ async function notifyChannelOrder(row) {
   }
 }
 
+// ===== Admin JWT helpers (NEW) =====
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+const SESSION_TTL_DAYS = parseInt(process.env.SESSION_TTL_DAYS || "7", 10);
+
+function signAdminJwt(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: `${SESSION_TTL_DAYS}d` });
+}
+function readBearer(req) {
+  const h = req.headers.authorization || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
+}
+function tryVerifyJwt(token) {
+  try { return jwt.verify(token, JWT_SECRET); }
+  catch { return null; }
+}
+
 // ===== Schema & seed =====
 const SCHEMA_SQL = `
 create table if not exists products (
@@ -186,6 +216,18 @@ create table if not exists profiles (
 );
 `;
 
+// --- NEW: separate admin schema (keeps your original constant intact) ---
+const SCHEMA_ADMIN_SQL = `
+create table if not exists admin_users (
+  id bigserial primary key,
+  email text unique not null,
+  name text not null,
+  password_hash text not null,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+`;
+
 const SEED_SQL = `
 insert into products(id,title,price,category,image,age_restricted,stock) values
 ('RICE5','Basmati Rice 5kg',89900,'Rice & Grains','',false,500),
@@ -211,24 +253,191 @@ app.post("/verify", (req, res) => {
   res.json({ ok: true, user: JSON.parse(decodeURIComponent(userRaw)) });
 });
 
-// ===== Admin auth =====
-function requireAdmin(req, res, next) {
-  const key = req.headers["x-admin-key"];
-  if (!key || key !== process.env.ADMIN_PASSWORD)
-    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-  next();
+// ===== Admin auth middleware (REPLACED) =====
+// Backward compatible: still accepts x-admin-key == ADMIN_PASSWORD
+async function requireAdmin(req, res, next) {
+  // 1) old header path
+  const legacyKey = req.headers["x-admin-key"];
+  if (legacyKey && legacyKey === process.env.ADMIN_PASSWORD) return next();
+
+  // 2) JWT path
+  const token = readBearer(req);
+  if (!token) return res.status(401).json({ ok: false, error: "NO_TOKEN" });
+
+  const data = tryVerifyJwt(token);
+  if (!data?.aid) return res.status(401).json({ ok: false, error: "BAD_TOKEN" });
+
+  try {
+    const r = await pool.query("select id,email,name,active from admin_users where id=$1", [data.aid]);
+    if (!r.rowCount || !r.rows[0].active) return res.status(403).json({ ok:false, error:"ADMIN_DISABLED" });
+    req.admin = r.rows[0];
+    next();
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"AUTH_DB_ERROR" });
+  }
 }
 
 // ===== Admin: schema + seed =====
-app.post("/admin/init", requireAdmin, async (_req, res) => {
+app.post("/admin/init", async (_req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
-  await pool.query(SCHEMA_SQL);
-  res.json({ ok: true });
+  try {
+    await pool.query(SCHEMA_SQL);
+    await pool.query(SCHEMA_ADMIN_SQL);
+
+    // Optional seed default admin from env the FIRST time
+    if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+      const exists = await pool.query("select 1 from admin_users where email=$1", [process.env.ADMIN_EMAIL.toLowerCase()]);
+      if (!exists.rowCount) {
+        const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
+        await pool.query(
+          "insert into admin_users(email,name,password_hash,active) values($1,$2,$3,true)",
+          [process.env.ADMIN_EMAIL.toLowerCase(), "Owner", hash]
+        );
+        console.log("Seeded default admin:", process.env.ADMIN_EMAIL);
+      }
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"INIT_FAILED" });
+  }
 });
+
 app.post("/admin/seed", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   await pool.query(SEED_SQL);
   res.json({ ok: true });
+});
+
+// ===== Admin auth routes (NEW) =====
+app.post("/admin/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ ok:false, error:"MISSING_FIELDS" });
+
+    const r = await pool.query(
+      "select id,email,name,password_hash,active from admin_users where email=$1",
+      [String(email).trim().toLowerCase()]
+    );
+    if (!r.rowCount) return res.status(401).json({ ok:false, error:"INVALID_CREDENTIALS" });
+
+    const u = r.rows[0];
+    if (!u.active) return res.status(403).json({ ok:false, error:"ADMIN_DISABLED" });
+
+    const good = await bcrypt.compare(password, u.password_hash);
+    if (!good) return res.status(401).json({ ok:false, error:"INVALID_CREDENTIALS" });
+
+    const token = signAdminJwt({ aid: u.id });
+    res.json({ ok:true, token, admin: { id: u.id, email: u.email, name: u.name } });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"LOGIN_FAILED" });
+  }
+});
+
+app.get("/admin/auth/session", requireAdmin, async (req, res) => {
+  res.json({ ok:true, admin: req.admin || null });
+});
+
+// ===== Admin users CRUD (NEW) =====
+app.get("/admin/users", requireAdmin, async (_req, res) => {
+  try {
+    const r = await pool.query(
+      "select id,email,name,active,created_at from admin_users order by created_at desc"
+    );
+    res.json({ ok:true, items: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"LIST_ADMINS_FAILED" });
+  }
+});
+
+app.post("/admin/users", requireAdmin, async (req, res) => {
+  try {
+    const { email, name, password } = req.body || {};
+    if (!email || !name || !password) return res.status(400).json({ ok:false, error:"MISSING_FIELDS" });
+
+    const hash = await bcrypt.hash(password, 10);
+    await pool.query(
+      `insert into admin_users(email,name,password_hash,active) values($1,$2,$3,true)`,
+      [email.trim().toLowerCase(), name.trim(), hash]
+    );
+    res.json({ ok:true });
+  } catch (e) {
+    if (String(e).includes("unique")) return res.status(409).json({ ok:false, error:"EMAIL_EXISTS" });
+    console.error(e);
+    res.status(500).json({ ok:false, error:"CREATE_ADMIN_FAILED" });
+  }
+});
+
+app.put("/admin/users/:id", requireAdmin, async (req, res) => {
+  try {
+    const id = +req.params.id;
+    const { name, password, active } = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+
+    if (name != null) { sets.push(`name=$${i++}`); args.push(name); }
+    if (password) { sets.push(`password_hash=$${i++}`); args.push(await bcrypt.hash(password, 10)); }
+    if (active != null) { sets.push(`active=$${i++}`); args.push(!!active); }
+
+    if (!sets.length) return res.json({ ok:true });
+
+    args.push(id);
+    await pool.query(`update admin_users set ${sets.join(",")} where id=$${i}`, args);
+    res.json({ ok:true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"UPDATE_ADMIN_FAILED" });
+  }
+});
+
+app.delete("/admin/users/:id", requireAdmin, async (req, res) => {
+  try {
+    const id = +req.params.id;
+    // soft-disable instead of hard delete
+    await pool.query("update admin_users set active=false where id=$1", [id]);
+    res.json({ ok:true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"DELETE_ADMIN_FAILED" });
+  }
+});
+
+// ===== OPTIONAL: Image upload (Cloudinary) =====
+app.post("/admin/upload", requireAdmin, async (req, res) => {
+  if (!process.env.CLOUDINARY_URL) {
+    return res.status(400).json({ ok:false, error:"UPLOAD_NOT_CONFIGURED" });
+  }
+  try {
+    const form = formidable({ multiples: false, allowEmptyFiles: false });
+    form.parse(req, async (err, fields, files) => {
+      if (err) return res.status(400).json({ ok:false, error:"BAD_FORMDATA" });
+      const fileField = files.file || files.image || files.photo;
+      if (!fileField) return res.status(400).json({ ok:false, error:"NO_FILE" });
+
+      const f = Array.isArray(fileField) ? fileField[0] : fileField;
+      const filepath = f?.filepath || f?.path;
+      if (!filepath) return res.status(400).json({ ok:false, error:"NO_TEMP_PATH" });
+
+      try {
+        const up = await cloudinary.uploader.upload(filepath, {
+          folder: process.env.CLOUDINARY_FOLDER || "telegram-mini-mart",
+          overwrite: true,
+        });
+        return res.json({ ok:true, url: up.secure_url, public_id: up.public_id });
+      } catch (e) {
+        console.error(e);
+        return res.status(500).json({ ok:false, error:"UPLOAD_FAILED" });
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"UPLOAD_ERROR" });
+  }
 });
 
 // ===== Admin: products =====
