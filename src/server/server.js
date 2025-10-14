@@ -11,6 +11,18 @@ import jwt from "jsonwebtoken";
 import formidable from "formidable";
 import { v2 as cloudinary } from "cloudinary";
 
+// --- TEMP: JWT diagnostics helper ---
+function readBearer(req) {
+  const h = req.headers?.authorization || req.headers?.Authorization || "";
+  if (!h) return { ok: false, reason: "NO_AUTH_HEADER" };
+  const parts = h.split(/\s+/);
+  if (parts.length < 2 || parts[0].toLowerCase() !== "bearer")
+    return { ok: false, reason: "BAD_SCHEME", raw: h };
+  const token = parts.slice(1).join(" ").trim();
+  if (!token) return { ok: false, reason: "EMPTY_TOKEN" };
+  return { ok: true, token };
+}
+
 // Node >=18 has global fetch. If your logs ever show "fetch is not defined",
 // add:  import fetch from "node-fetch";
 
@@ -398,6 +410,27 @@ app.post("/admin/auth/login", async (req, res) => {
 
 app.get("/admin/auth/session", requireAdmin, async (req, res) => {
   res.json({ ok:true, admin: req.admin || null });
+});
+
+// --- TEMP: JWT verify endpoint (for debugging) ---
+import jwt from "jsonwebtoken"; // ensure you have a single jwt import once in the file
+
+app.get("/admin/auth/verify", (req, res) => {
+  try {
+    const r = readBearer(req);
+    if (!r.ok) return res.status(401).json({ ok: false, error: r.reason, raw: r.raw });
+
+    try {
+      const payload = jwt.verify(r.token, process.env.JWT_SECRET);
+      return res.json({ ok: true, payload });
+    } catch (e) {
+      // Log the exact reason on the server; send a safe message to client
+      console.warn("JWT verify failed:", e?.message || e);
+      return res.status(401).json({ ok: false, error: "BAD_TOKEN", message: e?.message || String(e) });
+    }
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "VERIFY_ERROR" });
+  }
 });
 
 // ===== Admin users CRUD (NEW) =====
