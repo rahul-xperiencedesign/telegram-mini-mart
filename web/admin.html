@@ -1,107 +1,156 @@
-<script>
-/** === Admin API bootstrap (Render + JWT) ===
- * Paste this block at the TOP of admin.html, before any other scripts.
- */
-(function () {
-  // 1) Your Render backend (no trailing slash)
-  window.API_BASE = 'https://telegram-mini-mart.onrender.com';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login — South Asia Mart</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .login-card {
+      background: #1e293b;
+      padding: 2rem;
+      border-radius: 1rem;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 0 24px rgba(0, 0, 0, 0.3);
+    }
+    h2 {
+      margin-top: 0;
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.75rem;
+      margin: 0.5rem 0;
+      border-radius: 0.5rem;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      margin-top: 1rem;
+      background: #2563eb;
+      border: none;
+      color: white;
+      font-weight: 600;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    .note {
+      text-align: center;
+      margin-top: 0.75rem;
+      font-size: 0.875rem;
+      color: #94a3b8;
+    }
+    .error {
+      color: #f87171;
+      text-align: center;
+      margin-top: 0.75rem;
+      display: none;
+    }
+  </style>
 
-  // Token storage key
+  <!-- === API + Auth Bootstrap === -->
+  <script>
+  (function () {
+    // Point frontend to your Render backend
+    window.API_BASE = 'https://telegram-mini-mart.onrender.com';
+    const TOKEN_KEY = 'adminToken';
+
+    // Patch fetch() so relative URLs become absolute + attach Bearer token
+    const _origFetch = window.fetch.bind(window);
+    window.fetch = (input, init = {}) => {
+      let url = input;
+      if (typeof input === 'string' && input.startsWith('/')) {
+        url = window.API_BASE + input;
+      }
+      const headers = new Headers(init.headers || {});
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (token && !headers.has('Authorization')) {
+        headers.set('Authorization', 'Bearer ' + token);
+      }
+      return _origFetch(url, { ...init, headers });
+    };
+
+    // If already logged in, redirect to admin.html
+    const existing = localStorage.getItem(TOKEN_KEY);
+    if (existing) {
+      fetch('/admin/auth/session')
+        .then(r => r.ok && window.location.replace('/admin.html'))
+        .catch(() => {});
+    }
+
+    window.ADMIN = {
+      apiBase: window.API_BASE,
+      logout() {
+        localStorage.removeItem(TOKEN_KEY);
+      }
+    };
+  })();
+  </script>
+</head>
+
+<body>
+  <div class="login-card">
+    <h2>Admin Login</h2>
+    <form id="loginForm">
+      <input type="email" id="email" placeholder="Email" required />
+      <input type="password" id="password" placeholder="Password" required />
+      <button type="submit">Sign in</button>
+      <div class="error" id="errorMsg">Invalid credentials. Try again.</div>
+      <div class="note">Only authorized staff.</div>
+    </form>
+  </div>
+
+  <script>
+  const form = document.getElementById('loginForm');
+  const err = document.getElementById('errorMsg');
   const TOKEN_KEY = 'adminToken';
 
-  // 2) A small wrapper around fetch:
-  //    - Prefix relative URLs with API_BASE
-  //    - Attach Authorization: Bearer <token> if present
-  const _origFetch = window.fetch.bind(window);
-  window.fetch = async (input, init = {}) => {
-    let url = input;
-    if (typeof input === 'string' && input.startsWith('/')) {
-      url = API_BASE + input;
-    }
-    const headers = new Headers(init.headers || {});
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (token && !headers.has('Authorization')) {
-      headers.set('Authorization', 'Bearer ' + token);
-    }
-    return _origFetch(url, { ...init, headers });
-  };
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.style.display = 'none';
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value.trim();
 
-  // 3) Session helpers
-  async function verifySession() {
     try {
-      const r = await fetch('/admin/auth/session', { method: 'GET' });
-      return r.ok;
-    } catch {
-      return false;
+      const resp = await fetch('/admin/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok || !data.token) {
+        err.style.display = 'block';
+        return;
+      }
+
+      // Store JWT and redirect
+      localStorage.setItem(TOKEN_KEY, data.token);
+      window.location.href = '/admin.html';
+    } catch (ex) {
+      console.error(ex);
+      err.style.display = 'block';
     }
-  }
-
-  async function doLoginPrompt() {
-    const email = prompt('Admin email (Render env ADMIN_EMAIL):', '');
-    const password = prompt('Admin password (Render env ADMIN_PASSWORD):', '');
-    if (!email || !password) throw new Error('Login cancelled');
-
-    const resp = await fetch('/admin/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    let json = {};
-    try { json = await resp.json(); } catch { /* ignore */ }
-
-    if (!resp.ok || !json.ok || !json.token) {
-      console.warn('Login failed:', json);
-      throw new Error(json.error || 'Login failed');
-    }
-    localStorage.setItem(TOKEN_KEY, json.token);
-
-    // Double-check token works
-    const ok = await verifySession();
-    if (!ok) {
-      localStorage.removeItem(TOKEN_KEY);
-      throw new Error('Token verify failed after login');
-    }
-  }
-
-  async function ensureSession() {
-    // If a token exists, try to verify it; otherwise, prompt login
-    const hasToken = !!localStorage.getItem(TOKEN_KEY);
-    if (hasToken) {
-      const ok = await verifySession();
-      if (ok) return;
-      // token invalid/expired -> clear and fallthrough to prompt
-      localStorage.removeItem(TOKEN_KEY);
-    }
-    await doLoginPrompt().catch((err) => {
-      console.warn(err);
-      alert('Admin login required to use this page.');
-      throw err;
-    });
-  }
-
-  function logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    location.reload();
-  }
-
-  // 4) Expose helpers (optional, handy in DevTools)
-  window.ADMIN = {
-    login: () => doLoginPrompt().then(() => location.reload()),
-    logout,
-    apiBase: () => window.API_BASE
-  };
-
-  // 5) Bind a generic logout click (if a button exists)
-  document.addEventListener('click', (ev) => {
-    const el = ev.target.closest('[data-logout], #logout, .logout-button');
-    if (!el) return;
-    ev.preventDefault();
-    logout();
   });
-
-  // 6) Start: make sure we have a valid session before the page’s own scripts run
-  //    If you prefer an explicit "Log in" button, comment the line below
-  ensureSession().catch(() => {/* stop page init if not logged in */});
-})();
-</script>
+  </script>
+</body>
+</html>
