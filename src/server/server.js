@@ -1007,6 +1007,16 @@ app.post("/telegram/webhook", async (req, res) => {
   }
 });
 
+// ===== Admin: products =====
+app.get("/admin/products", requireAdmin, async (_req, res) => {
+  // ... existing code ...
+});
+
+// --- NEW: Admin session check endpoint (for dashboard login verification)
+app.get("/admin/auth/session", requireAdmin, (req, res) => {
+  res.json({ ok: true, admin: req.admin || null });
+});
+
 // ===== Start server =====
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Backend running on :${PORT}`));
