@@ -10,6 +10,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import formidable from "formidable";
 import { v2 as cloudinary } from "cloudinary";
+import jwt from "jsonwebtoken";
 
 // Node >=18 has global fetch. If your logs ever show "fetch is not defined",
 // add:  import fetch from "node-fetch";
@@ -309,6 +310,65 @@ app.post("/admin/seed", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
   await pool.query(SEED_SQL);
   res.json({ ok: true });
+});
+
+// ===== Admin: auth (email+password -> JWT), plus admin-key exchange =====
+
+// POST /admin/auth/login  (email+password -> JWT)
+// Accepts ADMIN_EMAIL='*' (wildcard) or case-insensitive exact match
+app.post("/admin/auth/login", async (req, res) => {
+  try {
+    const { email = "", password = "" } = req.body || {};
+    const cfgEmail = (process.env.ADMIN_EMAIL || "").trim();
+    const cfgPass = (process.env.ADMIN_PASSWORD || "").trim();
+    const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+
+    // password must match exactly
+    const passOk = password === cfgPass;
+
+    // email: wildcard or case-insensitive exact match; if ADMIN_EMAIL unset, skip email check
+    const emailOk =
+      !cfgEmail ||
+      cfgEmail === "*" ||
+      email.trim().toLowerCase() === cfgEmail.toLowerCase();
+
+    if (!passOk || !emailOk) {
+      return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
+    }
+
+    const token = jwt.sign(
+      { sub: "admin", email: email.trim(), role: "admin" },
+      jwtSecret,
+      { expiresIn: "7d" }
+    );
+    res.json({ ok: true, token });
+  } catch (e) {
+    console.error("ADMIN_LOGIN_FAILED:", e);
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// POST /admin/auth/exchange  (x-admin-key == ADMIN_PASSWORD -> JWT)
+app.post("/admin/auth/exchange", async (req, res) => {
+  try {
+    const key = req.headers["x-admin-key"];
+    const cfgPass = (process.env.ADMIN_PASSWORD || "").trim();
+    const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+
+    if (!key || key !== cfgPass) {
+      return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+    }
+
+    const token = jwt.sign(
+      { sub: "admin", email: process.env.ADMIN_EMAIL || "admin", role: "admin" },
+      jwtSecret,
+      { expiresIn: "7d" }
+    );
+    res.json({ ok: true, token });
+  } catch (e) {
+    console.error("ADMIN_EXCHANGE_FAILED:", e);
+    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
 });
 
 // ===== Admin auth routes (NEW) =====
