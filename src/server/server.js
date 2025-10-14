@@ -10,7 +10,6 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import formidable from "formidable";
 import { v2 as cloudinary } from "cloudinary";
-import jwt from "jsonwebtoken";
 
 // Node >=18 has global fetch. If your logs ever show "fetch is not defined",
 // add:  import fetch from "node-fetch";
