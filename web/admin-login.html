@@ -1,31 +1,67 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Admin Login — South Asia Mart</title>
-  <link rel="stylesheet" href="./styles.css" />
-  <script>window.API_URL = "https://telegram-mini-mart.onrender.com";</script>
+  <style>
+    body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto;
+         background:#0b1220;color:#e5e7eb;display:grid;place-items:center;height:100vh;margin:0}
+    .card{background:#111827;border:1px solid #1f2937;border-radius:14px;padding:28px;min-width:320px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    input,button{width:100%;padding:12px 14px;border-radius:10px;border:1px solid #374151;background:#0f172a;color:#e5e7eb}
+    input:focus{outline:none;border-color:#60a5fa}
+    button{background:#2563eb;border-color:#2563eb;font-weight:700;cursor:pointer}
+    button:disabled{opacity:.6;cursor:default}
+    .muted{color:#9ca3af;font-size:.9rem;margin-top:10px}
+    .err{color:#fca5a5;margin-top:10px}
+  </style>
 </head>
-<body class="login-body">
-  <div class="login-card">
-    <h1>South Asia Mart — Admin</h1>
-    <p class="muted">Enter admin password to continue.</p>
-    <input id="pw" type="password" placeholder="Admin Password" class="input" />
-    <button id="btn" class="btn primary" style="width:100%">Login</button>
-    <p class="muted" style="margin-top:10px">Tip: set <code>ADMIN_PASSWORD</code> in Render Environment.</p>
+<body>
+  <div class="card">
+    <h2 style="margin:0 0 14px">Admin Login</h2>
+    <form id="f">
+      <input id="email" type="email" placeholder="Email" autocomplete="username" required style="margin-bottom:10px"/>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required/>
+      <button id="btn" type="submit" style="margin-top:12px">Sign in</button>
+      <div id="msg" class="err" hidden></div>
+      <div class="muted">Only authorized staff.</div>
+    </form>
   </div>
-  <script>
-    document.getElementById('btn').onclick = async () => {
-      const key = (document.getElementById('pw').value || '').trim();
-      if (!key) return alert('Enter password');
-      // Quick ping to verify
-      const ok = await fetch(window.API_URL + '/admin/products', { headers: { 'x-admin-key': key } })
-        .then(r => r.ok).catch(()=>false);
-      if (!ok) return alert('Invalid password or API unavailable');
-      localStorage.setItem('adminkey', key);
-      location.href = './admin.html';
-    };
-  </script>
+
+<script>
+const API_BASE = "https://telegram-mini-mart.onrender.com";  // <-- backend base
+
+// Already logged in? go to dashboard
+if (localStorage.getItem("admintoken")) {
+  location.href = "./admin.html";
+}
+
+const f = document.getElementById("f");
+const btn = document.getElementById("btn");
+const msg = document.getElementById("msg");
+
+f.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  msg.hidden = true; btn.disabled = true;
+  try {
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+    const r = await fetch(API_BASE + "/admin/auth/login", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    const j = await r.json();
+    if (!j.ok || !j.token) throw new Error(j.error || "Login failed");
+    localStorage.setItem("admintoken", j.token);
+    location.href = "./admin.html";
+  } catch (e) {
+    msg.textContent = e.message || "Login failed";
+    msg.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
 </body>
 </html>
