@@ -8,8 +8,7 @@
   <style>
     :root{
       --bg:#0b1220; --card:#131b2c; --mut:#7d8bb3; --fg:#e9edff; --line:#23304d;
-      --acc:#2f6df2; --danger:#ec5b63; --ok:#1fb978; --warn:#efb044;
-      --chip:#1b2540;
+      --acc:#2f6df2; --danger:#ec5b63; --ok:#1fb978; --warn:#efb044; --chip:#1b2540;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -26,7 +25,7 @@
     .logout{background:#1a2338;border:1px solid var(--line);padding:10px 12px;border-radius:10px;color:var(--mut);cursor:pointer}
     .logout:hover{background:#162032;color:#fff}
     .main{padding:20px}
-    .toolbar{display:flex;gap:12px;justify-content:flex-end;align-items:center;margin-bottom:12px}
+    .toolbar{display:flex;gap:12px;justify-content:flex-end;align-items:center;margin-bottom:12px;flex-wrap:wrap}
     .page{display:none}
     .page.active{display:block}
 
@@ -89,6 +88,12 @@
     <!-- Top toolbar -->
     <div class="toolbar">
       <span class="chip">API <span id="apiBaseChip" class="mut"></span></span>
+
+      <!-- Currency switcher (NEW) -->
+      <label class="mut" for="currencySel">Currency</label>
+      <select id="currencySel" class="input"></select>
+      <button id="currencyApply" class="btn secondary">Apply</button>
+
       <span class="chip" id="currencyChip">…</span>
       <span class="chip" id="whoChip">checking…</span>
     </div>
@@ -110,7 +115,7 @@
 
       <div class="grid cols-4">
         <div class="card stat"><div class="k">Products</div><div id="statProducts" class="v">—</div></div>
-        <div class="card stat"><div class="k">Revenue</div><div id="statRevenue" class="v">—</div></div>
+        <div class="card stat"><div class="k" id="revLabel">Revenue</div><div id="statRevenue" class="v">—</div></div>
         <div class="card stat"><div class="k">Orders placed</div><div id="statPlaced" class="v">—</div></div>
         <div class="card stat"><div class="k">Delivered / Cancelled</div><div id="statDelCan" class="v">—</div></div>
       </div>
@@ -193,8 +198,8 @@
         </div>
         <div class="card">
           <div class="mut" style="margin-bottom:8px">Tip</div>
-          <p class="mut">Enter an existing SKU to update its details; otherwise it will be created.  
-          Prices are typed in **rupees** (we store paise for accuracy). Example: <b>200</b> → ₹200, <b>Rs2.5</b> → ₹2.50.</p>
+          <p class="mut">Enter an existing SKU to update its details; otherwise it will be created.
+          Prices are typed in <b>rupees</b> (we store paise for accuracy). Example: <b>200</b> → ₹200, <b>Rs2.5</b> → ₹2.50.</p>
         </div>
       </div>
     </section>
@@ -280,28 +285,28 @@ async function loadConfig() {
       window.CURRENCY_RATES = cfg.rates || window.CURRENCY_RATES;
       window.CURRENCY_DECIMALS = cfg.decimals ?? 2;
     }
-  } catch (e) {
-    console.warn('config fetch failed', e);
-  }
+  } catch (e) { console.warn('config fetch failed', e); }
+
+  // chip & toolbar controls
   document.getElementById('currencyChip').textContent =
     `${window.CURRENCY_SYMBOL} · ${window.CURRENCY}`;
+
+  const sel = document.getElementById('currencySel');
+  sel.innerHTML = '';
+  Object.keys(window.CURRENCY_RATES || {INR:1}).forEach(code=>{
+    const opt = document.createElement('option');
+    opt.value = code; opt.textContent = code;
+    if (code === window.CURRENCY) opt.selected = true;
+    sel.appendChild(opt);
+  });
 }
 
-  function formatPrice(paiseValue) {
-  if (!window.CURRENCY_RATES || !window.CURRENCY_SYMBOL) {
-    return `₹${(paiseValue / 100).formatPrice(price)}`;
-  }
-  const rate = window.CURRENCY_RATES[window.CURRENCY] || 1;
-  const value = (paiseValue / 100) * rate;
-  const decimals = window.CURRENCY_DECIMALS || 2;
-  return `${window.CURRENCY_SYMBOL}${value.toFixed(decimals)}`;
-}
-
-  /* Price helpers */
+/* ---------- Price helpers (single, correct) ---------- */
 function formatPrice(paiseValue){
   const rate = (window.CURRENCY_RATES || {})[window.CURRENCY] || 1;
   const value = (Number(paiseValue||0) / 100) * rate;
-  return `${window.CURRENCY_SYMBOL}${value.toFixed(window.CURRENCY_DECIMALS || 2)}`;
+  const decimals = window.CURRENCY_DECIMALS || 2;
+  return `${window.CURRENCY_SYMBOL}${value.toFixed(decimals)}`;
 }
 
 /* Parse admin input typed in RUPEES (e.g. 200 or Rs2.5) → integer paise */
@@ -324,10 +329,7 @@ btns.forEach(b=>{
     b.classList.add('active');
     const p = b.dataset.page;
     pages.forEach(id=>document.getElementById('page-'+id).classList.toggle('active', id===p));
-    if(p==='dashboard') loadDashboard();
-    if(p==='orders') loadOrders(1);
-    if(p==='inventory') loadInventory();
-    if(p==='users') loadUsers();
+    refreshActivePage();
   });
 });
 document.getElementById('logoutBtn').onclick = ()=>{
@@ -344,11 +346,40 @@ async function checkSession(){
   }catch{ location.href='admin-login.html'; }
 }
 
+// Currency apply button → persist on server → reload config → refresh page
+document.getElementById('currencyApply').onclick = async ()=>{
+  const code = document.getElementById('currencySel').value;
+  try{
+    const r = await fetch('/admin/settings/currency', {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ code })
+    });
+    // ignore body; reload config then refresh UI
+    await loadConfig();
+    refreshActivePage(true); // full redraw
+  }catch(e){
+    alert('Failed to switch currency'); console.warn(e);
+  }
+};
+
+function refreshActivePage(full=false){
+  // update revenue label symbol
+  document.getElementById('revLabel').textContent = `Revenue (${window.CURRENCY_SYMBOL})`;
+
+  const active = [...document.querySelectorAll('.page')].find(p=>p.classList.contains('active'));
+  if (!active) return;
+  if (active.id === 'page-dashboard') loadDashboard();
+  if (active.id === 'page-orders') loadOrders(1);
+  if (active.id === 'page-inventory') loadInventory();
+  if (full && active.id === 'page-products') {/* nothing to redraw */}
+}
+
 /* boot order: config → session → initial dashboard */
 (async function boot(){
   await loadConfig();
   await checkSession();
-  loadDashboard();
+  refreshActivePage(true);
 })();
 </script>
 
@@ -359,7 +390,7 @@ function mkChart(ctx, labels, values){
   if(revChart){ revChart.destroy(); }
   revChart = new Chart(ctx, {
     type:'line',
-    data:{ labels, datasets:[{ label:'Revenue', data: values, borderColor:'#2f6df2', backgroundColor:'rgba(47,109,242,.2)', tension:.3, fill:true }] },
+    data:{ labels, datasets:[{ label:`Revenue (${window.CURRENCY_SYMBOL})`, data: values, borderColor:'#2f6df2', backgroundColor:'rgba(47,109,242,.2)', tension:.3, fill:true }] },
     options:{ plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1a2540'}}, y:{grid:{color:'#1a2540'}}} }
   });
 }
@@ -387,11 +418,9 @@ async function loadDashboard(){
   document.getElementById('statDelCan').textContent =
     `${j.orders_delivered ?? 0} / ${j.orders_cancelled ?? 0}`;
 
+  const rate = (window.CURRENCY_RATES || {})[window.CURRENCY] || 1;
   const labels = (j.timeline || []).map(d=>d.day);
-  const values = (j.timeline || []).map(d=>{
-    const rate = (window.CURRENCY_RATES || {})[window.CURRENCY] || 1;
-    return ((d.revenue || 0)/100) * rate; // chart needs numeric values in selected currency
-  });
+  const values = (j.timeline || []).map(d=> ((d.revenue || 0)/100) * rate );
   mkChart(document.getElementById('revChart'), labels, values);
 
   const box = document.getElementById('lowStockBox');
@@ -530,7 +559,7 @@ document.getElementById('saveProduct').onclick = async ()=>{
   const body = {
     id: sku.value.trim(),
     title: title.value.trim(),
-    price: parseRupeesInputToPaise(price.value),  // <— convert rupees → paise
+    price: parseRupeesInputToPaise(price.value),  // convert rupees → paise
     category: category.value.trim(),
     image: image.value.trim(),
     stock: +stock.value||0,
