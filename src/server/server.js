@@ -527,32 +527,51 @@ app.post("/admin/products/bulk", requireAdmin, async (req, res) => {
 });
 
 // ===== Admin: stats + orders + profiles =====
-app.get("/admin/stats", requireAdmin, async (_req, res) => {
-  if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
+app.get("/admin/stats", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).json({ ok:false, error:"DB_NOT_CONFIGURED" });
   try {
+    const { range, from, to } = req.query;
+
+    let where = "created_at > now() - interval '7 days'";
+    if (range === '30d') where = "created_at > now() - interval '30 days'";
+    if (range === '365d') where = "created_at > now() - interval '12 months'";
+    if (from && to) where = `created_at >= '${from} 00:00:00' and created_at <= '${to} 23:59:59'`;
+
     const prod = await pool.query("select count(*)::int as count from products");
+
     const rev = await pool.query(
-      "select coalesce(sum(total),0)::int as revenue from orders where status in ('paid','placed')"
+      `select coalesce(sum(total),0)::int as revenue from orders where ${where}`
     );
-    const last7 = await pool.query(`
+
+    const placed = await pool.query(`select count(*)::int c from orders where ${where}`);
+    const delivered = await pool.query(`select count(*)::int c from orders where ${where} and status='delivered'`);
+    const cancelled = await pool.query(`select count(*)::int c from orders where ${where} and status='cancelled'`);
+
+    const timeline = await pool.query(`
       select to_char(date_trunc('day', created_at),'YYYY-MM-DD') as day,
              count(*)::int as orders, coalesce(sum(total),0)::int as revenue
-      from orders where created_at > now() - interval '7 days'
+      from orders
+      where ${where}
       group by 1 order by 1
     `);
+
     const low = await pool.query(
       "select id,title,stock from products where stock <= 20 order by stock asc limit 20"
     );
+
     res.json({
-      ok: true,
+      ok:true,
       product_count: prod.rows[0].count,
       revenue: rev.rows[0].revenue,
-      last7: last7.rows,
-      low_stock: low.rows,
+      orders_placed: placed.rows[0].c,
+      orders_delivered: delivered.rows[0].c,
+      orders_cancelled: cancelled.rows[0].c,
+      timeline: timeline.rows,
+      low_stock: low.rows
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ ok: false, error: "STATS_FAILED" });
+    res.status(500).json({ ok:false, error:"STATS_FAILED" });
   }
 });
 
@@ -629,6 +648,41 @@ app.get("/admin/profiles", requireAdmin, async (req, res) => {
     await pool.query(`select count(*)::int as c from profiles ${where}`, params)
   ).rows[0].c;
   res.json({ ok: true, items: rows, page: +page, pageSize: limit, total });
+});
+
+// --- NEW: delete an order ---
+app.delete("/admin/orders/:id", requireAdmin, async (req, res) => {
+  try {
+    await pool.query("delete from order_items where order_id=$1", [req.params.id]);
+    await pool.query("delete from orders where id=$1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"DELETE_ORDER_FAILED" });
+  }
+});
+
+// --- NEW: edit order basic fields ---
+app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
+  try {
+    const { name, phone, address, slot, note } = req.body || {};
+    const sets = [], args = []; let i=1;
+
+    if (name != null)   { sets.push(`name=$${i++}`);   args.push(name); }
+    if (phone != null)  { sets.push(`phone=$${i++}`);  args.push(phone); }
+    if (address != null){ sets.push(`address=$${i++}`);args.push(address); }
+    if (slot != null)   { sets.push(`slot=$${i++}`);   args.push(slot); }
+    if (note != null)   { sets.push(`note=$${i++}`);   args.push(note); }
+
+    if (!sets.length) return res.json({ ok: true });
+
+    args.push(req.params.id);
+    await pool.query(`update orders set ${sets.join(", ")} where id=$${i}`, args);
+    res.json({ ok:true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"UPDATE_ORDER_FAILED" });
+  }
 });
 
 // ===== Public catalog =====
