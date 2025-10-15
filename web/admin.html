@@ -16,7 +16,7 @@
     body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial}
     a{color:var(--acc);text-decoration:none}
     .app{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
-    .side{background: #0f1627;border-right:1px solid var(--line);display:flex;flex-direction:column}
+    .side{background:#0f1627;border-right:1px solid var(--line);display:flex;flex-direction:column}
     .brand{padding:18px 20px;border-bottom:1px solid var(--line);font-weight:700;letter-spacing:.3px}
     .nav{padding:12px}
     .nav button{width:100%;padding:12px 14px;border:0;border-radius:12px;background:transparent;color:var(--fg);text-align:left;cursor:pointer}
@@ -89,6 +89,7 @@
     <!-- Top toolbar -->
     <div class="toolbar">
       <span class="chip">API <span id="apiBaseChip" class="mut"></span></span>
+      <span class="chip" id="currencyChip">…</span>
       <span class="chip" id="whoChip">checking…</span>
     </div>
 
@@ -109,7 +110,7 @@
 
       <div class="grid cols-4">
         <div class="card stat"><div class="k">Products</div><div id="statProducts" class="v">—</div></div>
-        <div class="card stat"><div class="k">Revenue (₹)</div><div id="statRevenue" class="v">—</div></div>
+        <div class="card stat"><div class="k">Revenue</div><div id="statRevenue" class="v">—</div></div>
         <div class="card stat"><div class="k">Orders placed</div><div id="statPlaced" class="v">—</div></div>
         <div class="card stat"><div class="k">Delivered / Cancelled</div><div id="statDelCan" class="v">—</div></div>
       </div>
@@ -173,7 +174,7 @@
           <div class="grid">
             <input id="sku" class="input" placeholder="SKU e.g. RICE5">
             <input id="title" class="input" placeholder="Product title">
-            <input id="price" class="input" placeholder="Price (in paise, e.g. 89900)">
+            <input id="price" class="input" placeholder="Price in rupees (e.g. 200 or Rs2.5)">
             <input id="category" class="input" placeholder="Category e.g. Rice & Grains">
             <input id="image" class="input" placeholder="Image URL (optional)">
             <input id="stock" class="input" placeholder="Stock e.g. 1000">
@@ -192,7 +193,8 @@
         </div>
         <div class="card">
           <div class="mut" style="margin-bottom:8px">Tip</div>
-          <p class="mut">Enter an existing SKU to update its details; otherwise it will be created.</p>
+          <p class="mut">Enter an existing SKU to update its details; otherwise it will be created.  
+          Prices are typed in **rupees** (we store paise for accuracy). Example: <b>200</b> → ₹200, <b>Rs2.5</b> → ₹2.50.</p>
         </div>
       </div>
     </section>
@@ -249,9 +251,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <script>
-/** =========  BOOTSTRAP: API base + auth  =========
- * Set this to your Render backend. No trailing slash.
- */
+/** =========  BOOTSTRAP: API base + auth  ========= */
 window.API_BASE = 'https://telegram-mini-mart.onrender.com';
 
 const _origFetch = window.fetch.bind(window);
@@ -263,10 +263,49 @@ window.fetch = (input, init = {}) => {
   if (token && !headers.has('Authorization')) headers.set('Authorization','Bearer '+token);
   return _origFetch(url, { ...init, headers });
 };
+
+/* ========= Currency config (from /config) ========= */
+window.CURRENCY = 'INR';
+window.CURRENCY_SYMBOL = '₹';
+window.CURRENCY_RATES = { INR:1, USD:0.012, CNY:0.088, THB:0.44, KHR:50 };
+window.CURRENCY_DECIMALS = 2;
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/config');
+    const cfg = await res.json();
+    if (cfg?.ok) {
+      window.CURRENCY = cfg.currency || 'INR';
+      window.CURRENCY_SYMBOL = cfg.symbol || '₹';
+      window.CURRENCY_RATES = cfg.rates || window.CURRENCY_RATES;
+      window.CURRENCY_DECIMALS = cfg.decimals ?? 2;
+    }
+  } catch (e) {
+    console.warn('config fetch failed', e);
+  }
+  document.getElementById('currencyChip').textContent =
+    `${window.CURRENCY_SYMBOL} · ${window.CURRENCY}`;
+}
+
+/* Price helpers */
+function formatPrice(paiseValue){
+  const rate = (window.CURRENCY_RATES || {})[window.CURRENCY] || 1;
+  const value = (Number(paiseValue||0) / 100) * rate;
+  return `${window.CURRENCY_SYMBOL}${value.toFixed(window.CURRENCY_DECIMALS || 2)}`;
+}
+
+/* Parse admin input typed in RUPEES (e.g. 200 or Rs2.5) → integer paise */
+function parseRupeesInputToPaise(input){
+  if (typeof input !== 'string') input = String(input ?? '');
+  const cleaned = input.replace(/[^\d.]/g,''); // keep digits & dot
+  const rupees = cleaned ? parseFloat(cleaned) : 0;
+  if (Number.isNaN(rupees)) return 0;
+  return Math.round(rupees * 100); // store as paise in DB (INR base)
+}
 </script>
 
 <script>
-/* ===============  NAV  =============== */
+/* ===============  NAV + SESSION  =============== */
 const pages = ['dashboard','orders','products','inventory','users'];
 const btns = document.querySelectorAll('.nav button');
 btns.forEach(b=>{
@@ -286,7 +325,6 @@ document.getElementById('logoutBtn').onclick = ()=>{
 };
 document.getElementById('apiBaseChip').textContent = API_BASE.replace(/^https?:\/\//,'');
 
-/* ===============  SESSION WHOAMI  =============== */
 async function checkSession(){
   try{
     const r = await fetch('/admin/auth/session');
@@ -295,7 +333,13 @@ async function checkSession(){
     document.getElementById('whoChip').textContent = j?.admin?.email || 'admin';
   }catch{ location.href='admin-login.html'; }
 }
-checkSession();
+
+/* boot order: config → session → initial dashboard */
+(async function boot(){
+  await loadConfig();
+  await checkSession();
+  loadDashboard();
+})();
 </script>
 
 <script>
@@ -305,13 +349,12 @@ function mkChart(ctx, labels, values){
   if(revChart){ revChart.destroy(); }
   revChart = new Chart(ctx, {
     type:'line',
-    data:{ labels, datasets:[{ label:'₹ revenue', data: values, borderColor:'#2f6df2', backgroundColor:'rgba(47,109,242,.2)', tension:.3, fill:true }] },
+    data:{ labels, datasets:[{ label:'Revenue', data: values, borderColor:'#2f6df2', backgroundColor:'rgba(47,109,242,.2)', tension:.3, fill:true }] },
     options:{ plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1a2540'}}, y:{grid:{color:'#1a2540'}}} }
   });
 }
 
 async function loadDashboard(){
-  // read range
   const rangeSel = document.getElementById('dashRange').value;
   const fromEl = document.getElementById('fromDate');
   const toEl = document.getElementById('toDate');
@@ -328,19 +371,19 @@ async function loadDashboard(){
   const r = await fetch('/admin/stats'+qs);
   const j = await r.json();
 
-  // Summary cards
   document.getElementById('statProducts').textContent = j.product_count ?? '—';
-  document.getElementById('statRevenue').textContent = (j.revenue ?? 0).toLocaleString('en-IN');
+  document.getElementById('statRevenue').textContent = formatPrice(j.revenue ?? 0);
   document.getElementById('statPlaced').textContent = j.orders_placed ?? '—';
   document.getElementById('statDelCan').textContent =
     `${j.orders_delivered ?? 0} / ${j.orders_cancelled ?? 0}`;
 
-  // timeline
   const labels = (j.timeline || []).map(d=>d.day);
-  const values = (j.timeline || []).map(d=>d.revenue);
+  const values = (j.timeline || []).map(d=>{
+    const rate = (window.CURRENCY_RATES || {})[window.CURRENCY] || 1;
+    return ((d.revenue || 0)/100) * rate; // chart needs numeric values in selected currency
+  });
   mkChart(document.getElementById('revChart'), labels, values);
 
-  // low stock chips
   const box = document.getElementById('lowStockBox');
   box.innerHTML = '';
   (j.low_stock || []).forEach(p=>{
@@ -351,7 +394,6 @@ async function loadDashboard(){
   });
 }
 
-// range controls
 const rangeSel = document.getElementById('dashRange');
 rangeSel.onchange = ()=>{
   const custom = rangeSel.value==='custom';
@@ -359,9 +401,6 @@ rangeSel.onchange = ()=>{
   document.getElementById('toDate').classList.toggle('hide', !custom);
 };
 document.getElementById('applyRange').onclick = ()=> loadDashboard();
-
-// initial load
-loadDashboard();
 </script>
 
 <script>
@@ -376,8 +415,6 @@ document.getElementById('orderPageSize').onchange = e=>{
 };
 document.getElementById('orderRefresh').onclick = ()=> loadOrders(orderState.page);
 document.getElementById('orderSearch').onkeydown = e=>{ if(e.key==='Enter'){ orderState.q=e.target.value.trim(); loadOrders(1); } };
-
-function rupees(n){ return '₹ ' + (n/100).toLocaleString('en-IN'); }
 
 async function loadOrders(page){
   orderState.page = page;
@@ -410,13 +447,9 @@ async function loadOrders(page){
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ status:newStatus })
       });
-      if(r.ok){
-        // keep the choice visible
-        sel.value = newStatus;
-      }
+      if(r.ok){ sel.value = newStatus; }
     };
 
-    // edit / delete
     const btnEdit = document.createElement('button'); btnEdit.className='btn'; btnEdit.textContent='Edit';
     btnEdit.onclick = ()=> editOrderModal(row);
 
@@ -431,7 +464,7 @@ async function loadOrders(page){
     tr.innerHTML = `
       <td>${row.id}</td>
       <td>${row.name || ''}<br><span class="mut">${row.phone || ''}</span></td>
-      <td>${rupees(row.total)}</td>
+      <td>${formatPrice(row.total)}</td>
       <td><span class="mut">${new Date(row.created_at).toLocaleString()}</span></td>
       <td></td>
       <td class="t-actions"></td>
@@ -443,7 +476,6 @@ async function loadOrders(page){
     tb.appendChild(tr);
   });
 
-  // pagination
   const pages = Math.max(1, Math.ceil((j.total || 0) / (j.pageSize || orderState.pageSize)));
   const pg = document.getElementById('ordersPagi'); pg.innerHTML='';
   for(let i=1;i<=pages;i++){
@@ -453,7 +485,6 @@ async function loadOrders(page){
   }
 }
 
-// very small edit modal (address/phone/slot/note)
 function editOrderModal(row){
   const html = `
     <div class="card" style="position:fixed;inset:0;max-width:560px;margin:auto;background:#0b1220;border:1px solid var(--line);padding:16px;z-index:9999;border-radius:16px">
@@ -464,9 +495,7 @@ function editOrderModal(row){
         <input id="mAddr" class="input" placeholder="Address" value="${row.address||''}">
         <input id="mSlot" class="input" placeholder="Delivery slot" value="${row.slot||''}">
         <textarea id="mNote" class="input" placeholder="Note">${row.note||''}</textarea>
-        <div class="row">
-          <button id="mSave" class="btn ok">Save</button>
-        </div>
+        <div class="row"><button id="mSave" class="btn ok">Save</button></div>
       </div>
     </div>`;
   const wrap = document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap);
@@ -489,22 +518,26 @@ function editOrderModal(row){
 /* ===============  ADD / UPDATE PRODUCT  =============== */
 document.getElementById('saveProduct').onclick = async ()=>{
   const body = {
-    id: sku.value.trim(), title: title.value.trim(),
-    price: +price.value||0, category: category.value.trim(),
-    image: image.value.trim(), stock: +stock.value||0,
+    id: sku.value.trim(),
+    title: title.value.trim(),
+    price: parseRupeesInputToPaise(price.value),  // <— convert rupees → paise
+    category: category.value.trim(),
+    image: image.value.trim(),
+    stock: +stock.value||0,
     age_restricted: ageRestricted.checked
   };
   if(!body.id || !body.title || !body.category){ alert('SKU, title and category required'); return; }
   const r = await fetch('/admin/products', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-  if(r.ok){ alert('Saved'); } else alert('Save failed');
+  alert(r.ok?'Saved':'Save failed');
 };
+
 document.getElementById('deleteProduct').onclick = async ()=>{
   const id = sku.value.trim(); if(!id) return;
   if(!confirm('Delete product '+id+'?')) return;
   const r = await fetch('/admin/products/'+encodeURIComponent(id), { method:'DELETE' });
   alert(r.ok?'Deleted':'Delete failed');
 };
-// cloudinary upload (optional)
+
 document.getElementById('uploadBtn').onclick = async ()=>{
   const f = document.getElementById('uploadFile').files[0]; if(!f){ alert('Choose a file'); return; }
   const fd = new FormData(); fd.append('file', f);
@@ -533,7 +566,7 @@ async function loadInventory(){
       <td>${p.id}</td>
       <td>${p.title}</td>
       <td>${p.category}</td>
-      <td>${rupees(p.price||0)}</td>
+      <td>${formatPrice(p.price||0)}</td>
       <td>${p.stock}</td>
       <td>${p.age_restricted ? 'Yes':'No'}</td>
     `;
