@@ -287,7 +287,17 @@ async function loadConfig() {
     `${window.CURRENCY_SYMBOL} · ${window.CURRENCY}`;
 }
 
-/* Price helpers */
+  function formatPrice(paiseValue) {
+  if (!window.CURRENCY_RATES || !window.CURRENCY_SYMBOL) {
+    return `₹${(paiseValue / 100).formatPrice(price)}`;
+  }
+  const rate = window.CURRENCY_RATES[window.CURRENCY] || 1;
+  const value = (paiseValue / 100) * rate;
+  const decimals = window.CURRENCY_DECIMALS || 2;
+  return `${window.CURRENCY_SYMBOL}${value.toFixed(decimals)}`;
+}
+
+  /* Price helpers */
 function formatPrice(paiseValue){
   const rate = (window.CURRENCY_RATES || {})[window.CURRENCY] || 1;
   const value = (Number(paiseValue||0) / 100) * rate;
