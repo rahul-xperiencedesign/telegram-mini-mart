@@ -215,6 +215,11 @@ create table if not exists profiles (
   delivery_slot text,
   updated_at timestamptz not null default now()
 );
+
+create table if not exists settings (
+  key text primary key,
+  value jsonb not null
+);
 `;
 
 const SCHEMA_ADMIN_SQL = `
@@ -277,6 +282,69 @@ async function requireAdmin(req, res, next) {
   }
 }
 
+// ===== Currency helpers & endpoints =====
+function currencySymbol(code) {
+  switch ((code || 'INR').toUpperCase()) {
+    case 'INR': return '₹';
+    case 'USD': return '$';
+    case 'CNY': return '¥';
+    case 'THB': return '฿';
+    case 'KHR': return '៛';
+    default: return code.toUpperCase();
+  }
+}
+const CURRENCY_DECIMALS = { INR:2, USD:2, CNY:2, THB:2, KHR:0 };
+
+// Public config: current display currency + rates
+app.get("/config", async (_req, res) => {
+  try {
+    const cur = (await pool.query("select value from settings where key='currency'")).rows[0]?.value || { code:'INR' };
+    const rates = (await pool.query("select value from settings where key='currency_rates'")).rows[0]?.value || { INR:1 };
+    const code = (cur.code || 'INR').toUpperCase();
+    res.json({
+      ok:true,
+      currency:code,
+      symbol:currencySymbol(code),
+      rates,
+      decimals:CURRENCY_DECIMALS[code] ?? 2
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:"CONFIG_FAILED" });
+  }
+});
+
+// Admin: list all settings
+app.get("/admin/settings", requireAdmin, async (_req, res) => {
+  const rows = await pool.query("select key,value from settings order by key");
+  res.json({ ok:true, items:rows.rows });
+});
+
+// Admin: set active display currency
+app.put("/admin/settings/currency", requireAdmin, async (req, res) => {
+  const allowed = ['INR','USD','CNY','THB','KHR'];
+  const code = String(req.body?.code || '').toUpperCase();
+  if (!allowed.includes(code))
+    return res.status(400).json({ ok:false, error:"INVALID_CURRENCY" });
+  await pool.query(`
+    insert into settings(key,value) values ('currency', jsonb_build_object('code',$1))
+    on conflict (key) do update set value=excluded.value
+  `, [code]);
+  res.json({ ok:true });
+});
+
+// Admin: update display conversion rates
+app.put("/admin/settings/rates", requireAdmin, async (req, res) => {
+  const rates = req.body?.rates;
+  if (!rates || typeof rates !== 'object')
+    return res.status(400).json({ ok:false, error:"BAD_RATES" });
+  await pool.query(`
+    insert into settings(key,value) values ('currency_rates', $1::jsonb)
+    on conflict (key) do update set value=excluded.value
+  `, [rates]);
+  res.json({ ok:true });
+});
+
 // ===== Admin: schema + seed =====
 app.post("/admin/init", async (_req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
@@ -298,6 +366,16 @@ app.post("/admin/init", async (_req, res) => {
         console.log("Seeded default admin:", process.env.ADMIN_EMAIL);
       }
     }
+
+    // Default display currency + sample conversion rates (for display only)
+await pool.query(`
+  insert into settings(key,value) values
+    ('currency', jsonb_build_object('code','INR')),
+    ('currency_rates', jsonb_build_object(
+      'INR',1.0,'USD',0.012,'CNY',0.088,'THB',0.44,'KHR',50
+    ))
+  on conflict (key) do nothing
+`);
 
     res.json({ ok: true });
   } catch (e) {
@@ -479,17 +557,31 @@ app.get("/admin/products", requireAdmin, async (_req, res) => {
 });
 
 app.post("/admin/products", requireAdmin, async (req, res) => {
-  if (!pool) return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
-  const { id, title, price, category, image = "", age_restricted = false, stock = 999 } =
-    req.body || {};
-  if (!id || !title || !category) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+  if (!pool)
+    return res.status(500).json({ ok: false, error: "DB_NOT_CONFIGURED" });
+
+  let { id, title, price, category, image = "", age_restricted = false, stock = 999 } = req.body || {};
+  if (!id || !title || !category)
+    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
+  // Allow decimal values exactly as typed (e.g. 2.5 => 2.5 units of current currency)
+  const priceNumber = parseFloat(price);
+  if (Number.isNaN(priceNumber) || priceNumber < 0)
+    return res.status(400).json({ ok:false, error:"INVALID_PRICE" });
+
+  // Convert to paise (store minor units consistently)
+  const pricePaise = Math.round(priceNumber * 100);
+
   await pool.query(
     `insert into products(id,title,price,category,image,age_restricted,stock)
      values($1,$2,$3,$4,$5,$6,$7)
-     on conflict(id) do update set title=$2,price=$3,category=$4,image=$5,age_restricted=$6,stock=$7`,
-    [id, title, +price || 0, category, image, !!age_restricted, +stock || 0]
+     on conflict(id) do update set
+       title=$2, price=$3, category=$4, image=$5,
+       age_restricted=$6, stock=$7`,
+    [id, title, pricePaise, category, image, !!age_restricted, +stock || 0]
   );
-  res.json({ ok: true });
+
+  res.json({ ok:true });
 });
 
 app.delete("/admin/products/:id", requireAdmin, async (req, res) => {
