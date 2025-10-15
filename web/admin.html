@@ -2,320 +2,591 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <title>Admin – South Asia Mart</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Admin · South Asia Mart</title>
+  <link rel="icon" href="data:," />
   <style>
-    :root{--bg:#0b1220;--panel:#121a2a;--muted:#8aa0c8;--text:#e7eefc;--accent:#3b82f6;--danger:#ef4444;--ok:#10b981}
-    *{box-sizing:border-box} html,body{height:100%} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
-    .wrap{max-width:1180px;margin:30px auto;padding:0 16px}
-    h1{font-size:18px;margin:0 0 18px}
-    .topbar{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
-    .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
-    .btn.small{padding:6px 10px;font-size:12px}
-    .btn.ghost{background:#26334e}
+    :root{
+      --bg:#0b1220; --card:#131b2c; --mut:#7d8bb3; --fg:#e9edff; --line:#23304d;
+      --acc:#2f6df2; --danger:#ec5b63; --ok:#1fb978; --warn:#efb044;
+      --chip:#1b2540;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    a{color:var(--acc);text-decoration:none}
+    .app{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
+    .side{background: #0f1627;border-right:1px solid var(--line);display:flex;flex-direction:column}
+    .brand{padding:18px 20px;border-bottom:1px solid var(--line);font-weight:700;letter-spacing:.3px}
+    .nav{padding:12px}
+    .nav button{width:100%;padding:12px 14px;border:0;border-radius:12px;background:transparent;color:var(--fg);text-align:left;cursor:pointer}
+    .nav button:hover{background:#0d1423}
+    .nav button.active{background:var(--acc)}
+    .foot{margin-top:auto;border-top:1px solid var(--line);padding:14px;display:flex;gap:10px}
+    .logout{background:#1a2338;border:1px solid var(--line);padding:10px 12px;border-radius:10px;color:var(--mut);cursor:pointer}
+    .logout:hover{background:#162032;color:#fff}
+    .main{padding:20px}
+    .toolbar{display:flex;gap:12px;justify-content:flex-end;align-items:center;margin-bottom:12px}
+    .page{display:none}
+    .page.active{display:block}
+
+    .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+    .grid{display:grid;gap:12px}
+    .grid.cols-2{grid-template-columns:1fr 1fr}
+    .grid.cols-3{grid-template-columns:repeat(3,1fr)}
+    .grid.cols-4{grid-template-columns:repeat(4,1fr)}
+    .stat{display:flex;flex-direction:column;gap:6px}
+    .stat .k{color:var(--mut);font-size:12px}
+    .stat .v{font-size:20px;font-weight:700}
+
+    .row{display:flex;gap:12px;align-items:center}
+    .row.wrap{flex-wrap:wrap}
+    .input, select, textarea{background:#0f1627;border:1px solid var(--line);color:var(--fg);padding:10px 12px;border-radius:10px;outline:none}
+    .input:focus, select:focus, textarea:focus{border-color:#3b61ff}
+    .btn{border:0;background:var(--acc);color:#fff;padding:10px 14px;border-radius:10px;cursor:pointer}
+    .btn.secondary{background:#1a2338;color:#c8d1f0;border:1px solid var(--line)}
     .btn.danger{background:var(--danger)}
-    .grid{display:grid;grid-template-columns:1.4fr .9fr;gap:16px}
-    .card{background:var(--panel);border:1px solid #1f2a44;border-radius:12px;padding:14px}
-    table{width:100%;border-collapse:collapse}
-    th,td{border-bottom:1px solid #1f2a44;padding:10px;vertical-align:top}
-    th{color:var(--muted);font-weight:600;text-align:left}
-    input,select{width:100%;background:#0e1626;border:1px solid #1e2a45;border-radius:8px;color:var(--text);padding:9px}
-    input::placeholder{color:#6f84b0}
-    .row{display:flex;gap:10px;align-items:center}
-    .row > *{flex:1}
-    .section-title{color:var(--muted);margin:8px 0 10px;font-weight:600}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid #1f2a44}
-    .pill.ok{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35)}
-    .pill.warn{background:rgba(234,179,8,.12);border-color:rgba(234,179,8,.35)}
-    .pill.muted{background:#0e1626;border-color:#243250;color:#a7b8df}
-    .right{text-align:right}
-    .muted{color:var(--muted)}
-    .spacer{height:10px}
-    .hint{font-size:12px;color:#9db2dc}
-    @media (max-width:950px){.grid{grid-template-columns:1fr}}
+    .btn.ok{background:var(--ok)}
+    .btn.warn{background:var(--warn);color:#0b1220}
+    .chip{background:var(--chip);border:1px solid var(--line);padding:6px 10px;border-radius:999px;color:#c6d3ff;font-size:12px}
+
+    table{width:100%;border-collapse:separate;border-spacing:0}
+    th,td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+    th{color:#9fb0dc;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.2px}
+    tr:hover td{background:#0f1627}
+    .t-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+    .pagi{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:10px}
+    .pagi .pagebtn{background:#0f1627;border:1px solid var(--line);color:#c8d1f0;border-radius:10px;padding:8px 10px;cursor:pointer}
+    .pagi .pagebtn.active{background:var(--acc)}
+
+    .mut{color:var(--mut)}
+    .sep{height:1px;background:var(--line);margin:14px 0}
+    .hide{display:none}
+    @media (max-width:1000px){ .grid.cols-3,.grid.cols-4{grid-template-columns:1fr 1fr} }
+    @media (max-width:760px){ .app{grid-template-columns:1fr} .side{position:sticky;top:0;z-index:10} }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="topbar">
-      <h1>Admin</h1>
-      <div class="row" style="flex:0 0 auto;gap:8px">
-        <button id="btnLogout" class="btn ghost small">Logout</button>
-      </div>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand">South Asia Mart — Admin</div>
+    <div class="nav">
+      <button class="active" data-page="dashboard">Dashboard</button>
+      <button data-page="orders">Order Status</button>
+      <button data-page="products">Add Product</button>
+      <button data-page="inventory">Inventory</button>
+      <button data-page="users">User Management</button>
+    </div>
+    <div class="foot">
+      <button id="logoutBtn" class="logout">Logout</button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <!-- Top toolbar -->
+    <div class="toolbar">
+      <span class="chip">API <span id="apiBaseChip" class="mut"></span></span>
+      <span class="chip" id="whoChip">checking…</span>
     </div>
 
-    <div class="grid">
-      <!-- LEFT: Orders -->
-      <div class="card">
-        <div class="row" style="gap:8px; margin-bottom:10px">
-          <strong style="flex:0 0 auto">Orders</strong>
-          <select id="filterStatus" style="flex:0 0 160px">
-            <option value="">All</option>
-            <option>placed</option>
-            <option>paid</option>
-            <option>shipped</option>
-            <option>delivered</option>
-            <option>cancelled</option>
-          </select>
-          <input id="filterQ" placeholder="Search name/phone/address" />
-          <button id="btnRefresh" class="btn small" style="flex:0 0 auto">Refresh</button>
-        </div>
+    <!-- DASHBOARD -->
+    <section id="page-dashboard" class="page active">
+      <div class="row wrap" style="margin-bottom:10px">
+        <label>Range</label>
+        <select id="dashRange" class="input">
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="365d">Last 12 months</option>
+          <option value="custom">Custom…</option>
+        </select>
+        <input type="date" id="fromDate" class="input hide">
+        <input type="date" id="toDate" class="input hide">
+        <button id="applyRange" class="btn secondary">Apply</button>
+      </div>
 
+      <div class="grid cols-4">
+        <div class="card stat"><div class="k">Products</div><div id="statProducts" class="v">—</div></div>
+        <div class="card stat"><div class="k">Revenue (₹)</div><div id="statRevenue" class="v">—</div></div>
+        <div class="card stat"><div class="k">Orders placed</div><div id="statPlaced" class="v">—</div></div>
+        <div class="card stat"><div class="k">Delivered / Cancelled</div><div id="statDelCan" class="v">—</div></div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:12px">
+        <div class="card">
+          <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="mut">Revenue timeline</div>
+            <span id="dashRangeLabel" class="chip">range: last 7 days</span>
+          </div>
+          <canvas id="revChart" height="120"></canvas>
+        </div>
+        <div class="card">
+          <div class="mut" style="margin-bottom:8px">Low stock (<= 20)</div>
+          <div id="lowStockBox" class="grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ORDERS -->
+    <section id="page-orders" class="page">
+      <div class="card" style="margin-bottom:12px">
+        <div class="row wrap">
+          <label>Status</label>
+          <select id="orderStatusFilter" class="input">
+            <option value="">All</option>
+            <option value="placed">Placed</option>
+            <option value="paid">Paid</option>
+            <option value="shipped">Shipped</option>
+            <option value="delivered">Delivered</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+
+          <input id="orderSearch" class="input" placeholder="Search name/phone/address">
+          <label>Per page</label>
+          <select id="orderPageSize" class="input">
+            <option>10</option><option selected>20</option><option>50</option><option>100</option>
+          </select>
+          <button id="orderRefresh" class="btn secondary">Refresh</button>
+        </div>
+      </div>
+
+      <div class="card">
         <table id="ordersTable">
           <thead>
-            <tr>
-              <th style="width:80px">ID</th>
-              <th>Customer</th>
-              <th class="right" style="width:120px">Total</th>
-              <th style="width:140px">Status</th>
-              <th style="width:160px">When</th>
-              <th style="width:120px">Action</th>
-            </tr>
+          <tr>
+            <th>ID</th><th>Customer</th><th>Total</th><th>When</th><th>Status</th><th>Action</th>
+          </tr>
           </thead>
           <tbody></tbody>
         </table>
+        <div class="pagi" id="ordersPagi"></div>
       </div>
+    </section>
 
-      <!-- RIGHT: Stats + Product editor -->
+    <!-- ADD PRODUCT -->
+    <section id="page-products" class="page">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="mut" style="margin-bottom:6px">Add / Update Product</div>
+          <div class="grid">
+            <input id="sku" class="input" placeholder="SKU e.g. RICE5">
+            <input id="title" class="input" placeholder="Product title">
+            <input id="price" class="input" placeholder="Price (in paise, e.g. 89900)">
+            <input id="category" class="input" placeholder="Category e.g. Rice & Grains">
+            <input id="image" class="input" placeholder="Image URL (optional)">
+            <input id="stock" class="input" placeholder="Stock e.g. 1000">
+            <div class="row"><input type="checkbox" id="ageRestricted"><label for="ageRestricted" class="mut">Age-restricted</label></div>
+            <div class="row">
+              <button id="saveProduct" class="btn ok">Save</button>
+              <button id="deleteProduct" class="btn danger">Delete</button>
+            </div>
+          </div>
+          <div class="sep"></div>
+          <div class="mut">Optional Cloudinary upload: <code>/admin/upload</code></div>
+          <div class="row">
+            <input type="file" id="uploadFile" />
+            <button id="uploadBtn" class="btn secondary">Upload → set Image URL</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="mut" style="margin-bottom:8px">Tip</div>
+          <p class="mut">Enter an existing SKU to update its details; otherwise it will be created.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- INVENTORY -->
+    <section id="page-inventory" class="page">
+      <div class="grid cols-3" style="margin-bottom:12px">
+        <div class="card stat"><div class="k">SKUs</div><div id="invTotal" class="v">—</div></div>
+        <div class="card stat"><div class="k">Low stock (<=20)</div><div id="invLow" class="v">—</div></div>
+        <div class="card stat"><div class="k">Out of stock</div><div id="invOut" class="v">—</div></div>
+      </div>
       <div class="card">
-        <div class="section-title">Quick Stats</div>
-        <div id="statsBox" class="muted" style="margin-bottom:14px">Loading…</div>
-
-        <div class="section-title">Add / Update Product</div>
-        <div class="row">
-          <input id="p_id" placeholder="SKU e.g. RICE5" />
+        <div class="row wrap" style="margin-bottom:8px">
+          <input id="invSearch" class="input" placeholder="Filter by title/category">
+          <button id="invRefresh" class="btn secondary">Refresh</button>
         </div>
-        <div class="row">
-          <input id="p_title" placeholder="Product title" />
-        </div>
-        <div class="row">
-          <input id="p_price" placeholder="Price (₹ in paise, e.g. 89900)" />
-        </div>
-        <div class="row">
-          <input id="p_category" placeholder="Category e.g. Rice & Grains" />
-        </div>
-        <div class="row">
-          <input id="p_image" placeholder="Image URL (optional)" />
-        </div>
-        <div class="row" style="gap:8px">
-          <label style="flex:1 1 auto">
-            <input type="checkbox" id="p_restricted" /> Age-restricted
-          </label>
-          <input id="p_stock" placeholder="Stock e.g. 1000" />
-        </div>
-        <div class="row" style="gap:8px;margin-top:10px">
-          <button id="btnSave" class="btn">Save</button>
-          <button id="btnDelete" class="btn danger">Delete</button>
-        </div>
-
-        <div class="spacer"></div>
-        <div class="hint">Optional upload (requires Cloudinary + <code>/admin/upload</code>):</div>
-        <input type="file" id="fileUp" accept="image/*" />
-        <button id="btnUpload" class="btn small" style="margin-top:6px">Upload → set Image URL</button>
+        <table id="invTable">
+          <thead><tr><th>SKU</th><th>Title</th><th>Category</th><th>Price</th><th>Stock</th><th>Restricted</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
-    </div>
-  </div>
+    </section>
 
-  <script>
-    /***********************
-     * API + Auth bootstrap
-     ***********************/
-    // 1) Your Render backend (NO trailing slash)
-    const API_BASE = 'https://telegram-mini-mart.onrender.com';
+    <!-- USER MANAGEMENT -->
+    <section id="page-users" class="page">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="mut" style="margin-bottom:8px">Admins</div>
+          <table id="usersTable">
+            <thead><tr><th>ID</th><th>Email</th><th>Name</th><th>Active</th><th>Action</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="mut" style="margin-bottom:8px">Create / Update Admin</div>
+          <div class="grid">
+            <input id="uEmail" class="input" placeholder="Email">
+            <input id="uName" class="input" placeholder="Name">
+            <input id="uPass" class="input" placeholder="Set/Reset Password">
+            <div class="row">
+              <button id="uCreate" class="btn ok">Create</button>
+              <button id="uReset" class="btn warn">Reset Password</button>
+              <button id="uDeactivate" class="btn danger">Deactivate</button>
+            </div>
+          </div>
+          <p class="mut">To update: select a row above to fill fields, then change and click Reset / Deactivate.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
 
-    // 2) Patch fetch: prefix relative URLs & attach Authorization
-    const __fetch = window.fetch.bind(window);
-    window.fetch = (input, init = {}) => {
-      let url = input;
-      if (typeof input === 'string' && input.startsWith('/')) {
-        url = API_BASE + input;
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<script>
+/** =========  BOOTSTRAP: API base + auth  =========
+ * Set this to your Render backend. No trailing slash.
+ */
+window.API_BASE = 'https://telegram-mini-mart.onrender.com';
+
+const _origFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  let url = input;
+  if (typeof input === 'string' && input.startsWith('/')) url = API_BASE + input;
+  const headers = new Headers(init.headers || {});
+  const token = localStorage.getItem('adminToken');
+  if (token && !headers.has('Authorization')) headers.set('Authorization','Bearer '+token);
+  return _origFetch(url, { ...init, headers });
+};
+</script>
+
+<script>
+/* ===============  NAV  =============== */
+const pages = ['dashboard','orders','products','inventory','users'];
+const btns = document.querySelectorAll('.nav button');
+btns.forEach(b=>{
+  b.addEventListener('click',()=>{
+    btns.forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    const p = b.dataset.page;
+    pages.forEach(id=>document.getElementById('page-'+id).classList.toggle('active', id===p));
+    if(p==='dashboard') loadDashboard();
+    if(p==='orders') loadOrders(1);
+    if(p==='inventory') loadInventory();
+    if(p==='users') loadUsers();
+  });
+});
+document.getElementById('logoutBtn').onclick = ()=>{
+  localStorage.removeItem('adminToken'); location.href = 'admin-login.html';
+};
+document.getElementById('apiBaseChip').textContent = API_BASE.replace(/^https?:\/\//,'');
+
+/* ===============  SESSION WHOAMI  =============== */
+async function checkSession(){
+  try{
+    const r = await fetch('/admin/auth/session');
+    if(!r.ok){ location.href='admin-login.html'; return; }
+    const j = await r.json();
+    document.getElementById('whoChip').textContent = j?.admin?.email || 'admin';
+  }catch{ location.href='admin-login.html'; }
+}
+checkSession();
+</script>
+
+<script>
+/* ===============  DASHBOARD  =============== */
+let revChart;
+function mkChart(ctx, labels, values){
+  if(revChart){ revChart.destroy(); }
+  revChart = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets:[{ label:'₹ revenue', data: values, borderColor:'#2f6df2', backgroundColor:'rgba(47,109,242,.2)', tension:.3, fill:true }] },
+    options:{ plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1a2540'}}, y:{grid:{color:'#1a2540'}}} }
+  });
+}
+
+async function loadDashboard(){
+  // read range
+  const rangeSel = document.getElementById('dashRange').value;
+  const fromEl = document.getElementById('fromDate');
+  const toEl = document.getElementById('toDate');
+  let qs = '';
+  if(rangeSel==='custom' && fromEl.value && toEl.value){
+    qs = `?from=${fromEl.value}&to=${toEl.value}`;
+    document.getElementById('dashRangeLabel').textContent = `range: ${fromEl.value} → ${toEl.value}`;
+  }else{
+    qs = `?range=${encodeURIComponent(rangeSel)}`;
+    document.getElementById('dashRangeLabel').textContent =
+      'range: ' + (rangeSel==='7d'?'last 7 days':rangeSel==='30d'?'last 30 days':'last 12 months');
+  }
+
+  const r = await fetch('/admin/stats'+qs);
+  const j = await r.json();
+
+  // Summary cards
+  document.getElementById('statProducts').textContent = j.product_count ?? '—';
+  document.getElementById('statRevenue').textContent = (j.revenue ?? 0).toLocaleString('en-IN');
+  document.getElementById('statPlaced').textContent = j.orders_placed ?? '—';
+  document.getElementById('statDelCan').textContent =
+    `${j.orders_delivered ?? 0} / ${j.orders_cancelled ?? 0}`;
+
+  // timeline
+  const labels = (j.timeline || []).map(d=>d.day);
+  const values = (j.timeline || []).map(d=>d.revenue);
+  mkChart(document.getElementById('revChart'), labels, values);
+
+  // low stock chips
+  const box = document.getElementById('lowStockBox');
+  box.innerHTML = '';
+  (j.low_stock || []).forEach(p=>{
+    const el = document.createElement('div');
+    el.className='chip';
+    el.textContent = `${p.id} · ${p.title} · ${p.stock}`;
+    box.appendChild(el);
+  });
+}
+
+// range controls
+const rangeSel = document.getElementById('dashRange');
+rangeSel.onchange = ()=>{
+  const custom = rangeSel.value==='custom';
+  document.getElementById('fromDate').classList.toggle('hide', !custom);
+  document.getElementById('toDate').classList.toggle('hide', !custom);
+};
+document.getElementById('applyRange').onclick = ()=> loadDashboard();
+
+// initial load
+loadDashboard();
+</script>
+
+<script>
+/* ===============  ORDERS  =============== */
+let orderState = { page:1, pageSize:20, status:'', q:'' };
+
+document.getElementById('orderStatusFilter').onchange = e=>{
+  orderState.status = e.target.value; loadOrders(1);
+};
+document.getElementById('orderPageSize').onchange = e=>{
+  orderState.pageSize = +e.target.value; loadOrders(1);
+};
+document.getElementById('orderRefresh').onclick = ()=> loadOrders(orderState.page);
+document.getElementById('orderSearch').onkeydown = e=>{ if(e.key==='Enter'){ orderState.q=e.target.value.trim(); loadOrders(1); } };
+
+function rupees(n){ return '₹ ' + (n/100).toLocaleString('en-IN'); }
+
+async function loadOrders(page){
+  orderState.page = page;
+  const params = new URLSearchParams();
+  params.set('page', String(page));
+  params.set('pageSize', String(orderState.pageSize));
+  if(orderState.status) params.set('status', orderState.status);
+  if(orderState.q) params.set('q', orderState.q);
+
+  const r = await fetch('/admin/orders?'+params.toString());
+  const j = await r.json();
+
+  const tb = document.querySelector('#ordersTable tbody');
+  tb.innerHTML = '';
+  (j.items || []).forEach(row=>{
+    const tr = document.createElement('tr');
+
+    const sel = document.createElement('select');
+    ['placed','paid','shipped','delivered','cancelled'].forEach(s=>{
+      const o = document.createElement('option'); o.value=s; o.textContent=s;
+      if(s===row.status) o.selected=true;
+      sel.appendChild(o);
+    });
+
+    const btnUpd = document.createElement('button'); btnUpd.className='btn secondary'; btnUpd.textContent='Update';
+    btnUpd.onclick = async ()=>{
+      const newStatus = sel.value;
+      const r = await fetch('/admin/orders/'+row.id+'/status', {
+        method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ status:newStatus })
+      });
+      if(r.ok){
+        // keep the choice visible
+        sel.value = newStatus;
       }
-      const headers = new Headers(init.headers || {});
-      const token = localStorage.getItem('adminToken');
-      if (token && !headers.has('Authorization')) {
-        headers.set('Authorization', 'Bearer ' + token);
-      }
-      return __fetch(url, { ...init, headers });
     };
 
-    // 3) Guard: if not logged in / token bad → go to login
-    async function guard() {
-      const t = localStorage.getItem('adminToken');
-      if (!t) return goLogin();
-      try {
-        const r = await fetch('/admin/auth/session');
-        if (!r.ok) throw 0;
-        const js = await r.json().catch(() => ({}));
-        if (!js.ok) throw 0;
-      } catch {
-        localStorage.removeItem('adminToken');
-        return goLogin();
-      }
-    }
-    function goLogin() {
-      // Keep nice return flow after login
-      location.href = '/admin-login.html';
-    }
+    // edit / delete
+    const btnEdit = document.createElement('button'); btnEdit.className='btn'; btnEdit.textContent='Edit';
+    btnEdit.onclick = ()=> editOrderModal(row);
 
-    /***********************
-     * Small helpers
-     ***********************/
-    const $ = (sel, el=document) => el.querySelector(sel);
-    const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
-    const fmtINR = (paisa) => '₹ ' + (Math.round(+paisa)/100).toFixed(2);
+    const btnDel = document.createElement('button'); btnDel.className='btn danger'; btnDel.textContent='Delete';
+    btnDel.onclick = async ()=>{
+      if(!confirm(`Delete order #${row.id}?`)) return;
+      const rr = await fetch('/admin/orders/'+row.id, { method:'DELETE' });
+      if(rr.ok){ loadOrders(orderState.page); }
+      else alert('Delete failed (ensure backend patch added)');
+    };
 
-    function el(tag, props={}, ...kids){
-      const n = Object.assign(document.createElement(tag), props);
-      for (const k of kids) n.append(k);
-      return n;
-    }
+    tr.innerHTML = `
+      <td>${row.id}</td>
+      <td>${row.name || ''}<br><span class="mut">${row.phone || ''}</span></td>
+      <td>${rupees(row.total)}</td>
+      <td><span class="mut">${new Date(row.created_at).toLocaleString()}</span></td>
+      <td></td>
+      <td class="t-actions"></td>
+    `;
+    tr.children[4].appendChild(sel);
+    tr.children[5].appendChild(btnUpd);
+    tr.children[5].appendChild(btnEdit);
+    tr.children[5].appendChild(btnDel);
+    tb.appendChild(tr);
+  });
 
-    /***********************
-     * Stats
-     ***********************/
-    async function loadStats(){
-      const box = $('#statsBox');
-      box.textContent = 'Loading…';
-      const r = await fetch('/admin/stats');
-      const js = await r.json();
-      if (!r.ok || !js.ok) {
-        box.textContent = 'Failed to load stats';
-        return;
-      }
-      const lines = [
-        `Products: ${js.product_count}`,
-        `Revenue: ${fmtINR(js.revenue)}`,
-        '',
-        'Last 7 days:',
-        ...js.last7.map(d => `• ${d.day}: ${d.orders} orders / ${fmtINR(d.revenue)}`)
-      ];
-      box.innerHTML = lines.join('<br>');
-    }
+  // pagination
+  const pages = Math.max(1, Math.ceil((j.total || 0) / (j.pageSize || orderState.pageSize)));
+  const pg = document.getElementById('ordersPagi'); pg.innerHTML='';
+  for(let i=1;i<=pages;i++){
+    const b = document.createElement('button'); b.className='pagebtn'+(i===j.page?' active':''); b.textContent=i;
+    b.onclick = ()=> loadOrders(i);
+    pg.appendChild(b);
+  }
+}
 
-    /***********************
-     * Orders
-     ***********************/
-    let currentPage = 1;
-    async function loadOrders(){
-      const status = $('#filterStatus').value;
-      const q = $('#filterQ').value.trim();
-      const url = new URL('/admin/orders', API_BASE);
-      if (status) url.searchParams.set('status', status);
-      if (q) url.searchParams.set('q', q);
-      url.searchParams.set('page', currentPage);
-      url.searchParams.set('pageSize', 50);
+// very small edit modal (address/phone/slot/note)
+function editOrderModal(row){
+  const html = `
+    <div class="card" style="position:fixed;inset:0;max-width:560px;margin:auto;background:#0b1220;border:1px solid var(--line);padding:16px;z-index:9999;border-radius:16px">
+      <div class="row" style="justify-content:space-between"><div>Edit Order #${row.id}</div><button id="mClose" class="btn secondary">Close</button></div>
+      <div class="grid" style="margin-top:10px">
+        <input id="mName" class="input" placeholder="Name" value="${row.name||''}">
+        <input id="mPhone" class="input" placeholder="Phone" value="${row.phone||''}">
+        <input id="mAddr" class="input" placeholder="Address" value="${row.address||''}">
+        <input id="mSlot" class="input" placeholder="Delivery slot" value="${row.slot||''}">
+        <textarea id="mNote" class="input" placeholder="Note">${row.note||''}</textarea>
+        <div class="row">
+          <button id="mSave" class="btn ok">Save</button>
+        </div>
+      </div>
+    </div>`;
+  const wrap = document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap);
+  wrap.querySelector('#mClose').onclick = ()=> wrap.remove();
+  wrap.querySelector('#mSave').onclick = async ()=>{
+    const body = {
+      name: wrap.querySelector('#mName').value,
+      phone: wrap.querySelector('#mPhone').value,
+      address: wrap.querySelector('#mAddr').value,
+      slot: wrap.querySelector('#mSlot').value,
+      note: wrap.querySelector('#mNote').value
+    };
+    const rr = await fetch('/admin/orders/'+row.id, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    if(rr.ok){ wrap.remove(); loadOrders(orderState.page); } else alert('Update failed (ensure backend patch added)');
+  };
+}
+</script>
 
-      const r = await fetch(url.pathname + url.search);
-      const js = await r.json();
-      const tbody = $('#ordersTable tbody');
-      tbody.innerHTML = '';
-      if (!r.ok || !js.ok || !js.items?.length){
-        tbody.append(el('tr', {}, el('td', { colSpan: 6, className:'muted', textContent: 'No orders found.' })));
-        return;
-      }
-      for (const o of js.items){
-        const sel = el('select', { value: o.status });
-        ['placed','paid','shipped','delivered','cancelled'].forEach(s=>{
-          sel.append(el('option', { value:s, textContent:s }));
-        });
+<script>
+/* ===============  ADD / UPDATE PRODUCT  =============== */
+document.getElementById('saveProduct').onclick = async ()=>{
+  const body = {
+    id: sku.value.trim(), title: title.value.trim(),
+    price: +price.value||0, category: category.value.trim(),
+    image: image.value.trim(), stock: +stock.value||0,
+    age_restricted: ageRestricted.checked
+  };
+  if(!body.id || !body.title || !body.category){ alert('SKU, title and category required'); return; }
+  const r = await fetch('/admin/products', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  if(r.ok){ alert('Saved'); } else alert('Save failed');
+};
+document.getElementById('deleteProduct').onclick = async ()=>{
+  const id = sku.value.trim(); if(!id) return;
+  if(!confirm('Delete product '+id+'?')) return;
+  const r = await fetch('/admin/products/'+encodeURIComponent(id), { method:'DELETE' });
+  alert(r.ok?'Deleted':'Delete failed');
+};
+// cloudinary upload (optional)
+document.getElementById('uploadBtn').onclick = async ()=>{
+  const f = document.getElementById('uploadFile').files[0]; if(!f){ alert('Choose a file'); return; }
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/admin/upload', { method:'POST', body:fd });
+  const j = await r.json();
+  if(j.ok){ image.value = j.url; } else alert('Upload failed or not configured');
+};
+</script>
 
-        const btn = el('button', { className:'btn small', textContent:'Update' });
-        btn.onclick = async () => {
-          btn.disabled = true;
-          const rr = await fetch(`/admin/orders/${o.id}/status`, {
-            method:'PUT',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ status: sel.value })
-          });
-          btn.disabled = false;
-          if (rr.ok) loadOrders();
-          else alert('Failed to update status');
-        };
+<script>
+/* ===============  INVENTORY  =============== */
+async function loadInventory(){
+  const r = await fetch('/admin/products');
+  const j = await r.json();
+  const items = j.items || [];
+  const q = document.getElementById('invSearch').value.trim().toLowerCase();
+  const list = q ? items.filter(p=> (p.title||'').toLowerCase().includes(q) || (p.category||'').toLowerCase().includes(q) ) : items;
 
-        const tr = el('tr', {},
-          el('td', {}, '#'+o.id),
-          el('td', {}, el('div',{}, o.name||'—'), el('div',{className:'muted'}, (o.phone||'')+' · '+(o.address||''))),
-          el('td', { className:'right' }, fmtINR(o.total)),
-          el('td', {}, sel),
-          el('td', {}, new Date(o.created_at).toLocaleString()),
-          el('td', {}, btn),
-        );
-        tbody.append(tr);
-      }
-    }
+  const tbody = document.querySelector('#invTable tbody'); tbody.innerHTML='';
+  let low=0,out=0;
+  list.forEach(p=>{
+    if((+p.stock||0)<=20) low++;
+    if((+p.stock||0)<=0) out++;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${p.id}</td>
+      <td>${p.title}</td>
+      <td>${p.category}</td>
+      <td>${rupees(p.price||0)}</td>
+      <td>${p.stock}</td>
+      <td>${p.age_restricted ? 'Yes':'No'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
 
-    /***********************
-     * Products (CRUD)
-     ***********************/
-    async function onSaveProduct(){
-      const body = {
-        id: $('#p_id').value.trim(),
-        title: $('#p_title').value.trim(),
-        price: +$('#p_price').value.trim() || 0,
-        category: $('#p_category').value.trim(),
-        image: $('#p_image').value.trim(),
-        age_restricted: $('#p_restricted').checked,
-        stock: +$('#p_stock').value.trim() || 0,
-      };
-      if (!body.id || !body.title || !body.category) {
-        return alert('Please fill SKU, Title and Category.');
-      }
-      const r = await fetch('/admin/products', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body)
-      });
-      if (!r.ok) return alert('Save failed');
-      await loadStats();
-      alert('Saved ✓');
-    }
+  document.getElementById('invTotal').textContent = items.length;
+  document.getElementById('invLow').textContent = low;
+  document.getElementById('invOut').textContent = out;
+}
+document.getElementById('invRefresh').onclick = loadInventory;
+document.getElementById('invSearch').onkeydown = e=>{ if(e.key==='Enter') loadInventory(); };
+</script>
 
-    async function onDeleteProduct(){
-      const id = $('#p_id').value.trim();
-      if (!id) return alert('Enter SKU to delete');
-      if (!confirm(`Delete product ${id}?`)) return;
-      const r = await fetch('/admin/products/'+encodeURIComponent(id), { method:'DELETE' });
-      if (!r.ok) return alert('Delete failed');
-      await loadStats();
-      alert('Deleted ✓');
-    }
-
-    /***********************
-     * Optional: image upload
-     ***********************/
-    async function onUpload(){
-      const f = $('#fileUp').files?.[0];
-      if (!f) return alert('Choose a file first');
-      const fd = new FormData();
-      fd.append('file', f);
-      const r = await fetch('/admin/upload', { method:'POST', body: fd });
-      const js = await r.json().catch(()=>({}));
-      if (!r.ok || !js.ok) return alert('Upload failed (check Cloudinary settings)');
-      $('#p_image').value = js.url || '';
-      alert('Uploaded ✓ — URL set in Image field');
-    }
-
-    /***********************
-     * Wiring
-     ***********************/
-    (async function init(){
-      await guard();               // redirect to login if not authenticated
-      await loadStats();
-      await loadOrders();
-
-      $('#btnRefresh').onclick = ()=>{ currentPage=1; loadOrders(); };
-      $('#filterStatus').onchange = ()=>{ currentPage=1; loadOrders(); };
-      $('#filterQ').onkeydown = (e)=>{ if (e.key==='Enter') { currentPage=1; loadOrders(); } };
-
-      $('#btnSave').onclick = onSaveProduct;
-      $('#btnDelete').onclick = onDeleteProduct;
-      $('#btnUpload').onclick = onUpload;
-
-      $('#btnLogout').onclick = ()=>{
-        localStorage.removeItem('adminToken');
-        location.href = '/admin-login.html';
-      };
-    })();
-  </script>
+<script>
+/* ===============  USER MANAGEMENT  =============== */
+let selectedUserId = null;
+async function loadUsers(){
+  const r = await fetch('/admin/users'); const j = await r.json();
+  const tb = document.querySelector('#usersTable tbody'); tb.innerHTML='';
+  (j.items || []).forEach(u=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${u.id}</td>
+      <td>${u.email}</td>
+      <td>${u.name}</td>
+      <td>${u.active?'Yes':'No'}</td>
+      <td><button class="btn secondary">Select</button></td>
+    `;
+    tr.querySelector('button').onclick = ()=>{
+      selectedUserId = u.id;
+      uEmail.value = u.email; uName.value = u.name; uPass.value = '';
+    };
+    tb.appendChild(tr);
+  });
+}
+document.getElementById('uCreate').onclick = async ()=>{
+  const r = await fetch('/admin/users', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ email:uEmail.value.trim(), name:uName.value.trim(), password:uPass.value }) });
+  alert(r.ok?'Created':'Create failed'); if(r.ok) loadUsers();
+};
+document.getElementById('uReset').onclick = async ()=>{
+  if(!selectedUserId){ alert('Select a user first'); return; }
+  const r = await fetch('/admin/users/'+selectedUserId, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name:uName.value.trim(), password:uPass.value }) });
+  alert(r.ok?'Updated':'Update failed'); if(r.ok) loadUsers();
+};
+document.getElementById('uDeactivate').onclick = async ()=>{
+  if(!selectedUserId){ alert('Select a user first'); return; }
+  const r = await fetch('/admin/users/'+selectedUserId, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ active:false }) });
+  alert(r.ok?'Deactivated':'Failed'); if(r.ok) loadUsers();
+};
+</script>
 </body>
 </html>
